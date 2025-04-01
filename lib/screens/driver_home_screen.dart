@@ -132,7 +132,9 @@ void onStart(ServiceInstance service) async {
   try {
     // 1. Obtener Driver ID de SharedPreferences
     final prefs = await SharedPreferences.getInstance();
+    final _authProvider = AuthProvider();
     driverId = prefs.getString(PREFS_USER_ID);
+    final vehiculoType = _authProvider.user?.driverProfile?.vehicleType;
     if (driverId == null) {
       throw Exception(
         'BG Service Error: No se encontró ID del conductor en SharedPreferences.',
@@ -224,6 +226,7 @@ void onStart(ServiceInstance service) async {
     print('BG Service: Suscribiéndose a solicitudes para conductor: $driverId');
     requestSubscription = await tripRequestService.subscribeToDriverRequests(
       driverId,
+      vehiculoType,
       handleRequest, // Usar la función definida arriba
       handleError,
     );
@@ -871,6 +874,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   void _subscribeToRequests() {
     final userId = _authProvider.user?.id;
+    final vehiculoType = _authProvider.user?.driverProfile?.vehicleType;
     if (userId == null || !_isOnDuty || _tripProvider.activeTrip != null) {
       print(
         "No se suscribe a requests: userId=$userId, isOnDuty=$_isOnDuty, activeTrip=${_tripProvider.activeTrip != null}",
@@ -884,12 +888,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     try {
       _requestSubscription = tripRequestService.subscribeToDriverRequests(
         userId,
-        (payload) {
+        vehiculoType,
+        (TripRequest request) {
           // Ejecutar en el contexto correcto
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) {
-              print('Solicitud recibida por suscripción directa.');
-              _processIncomingRequest(payload);
+              print(
+                'Solicitud recibida por suscripción directa (TripRequest).',
+              );
+              // Pasar el objeto TripRequest directamente
+              _processIncomingRequest(request);
             }
           });
         },
@@ -905,6 +913,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   void _subscribeToDriverRequests() {
     final userId = _authProvider.user?.id;
+    final vehiculoType = _authProvider.user?.driverProfile?.vehicleType;
     if (userId == null || !_isOnDuty || _tripProvider.activeTrip != null) {
       print(
         "No se suscribe a requests: userId=$userId, isOnDuty=$_isOnDuty, activeTrip=${_tripProvider.activeTrip != null}",
@@ -918,12 +927,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     try {
       _requestSubscription = tripRequestService.subscribeToDriverRequests(
         userId,
-        (payload) {
+        vehiculoType,
+        (TripRequest request) {
           // Ejecutar en el contexto correcto
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) {
-              print('Solicitud recibida por suscripción directa.');
-              _processIncomingRequest(payload);
+              print(
+                'Solicitud recibida por suscripción directa (TripRequest).',
+              );
+              // Pasar el objeto TripRequest directamente
+              _processIncomingRequest(request);
             }
           });
         },
@@ -984,9 +997,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   // --- Procesamiento de Solicitudes y Viajes ---
 
   // Procesa una solicitud entrante (desde suscripción directa o background service)
-  Future<void> _processIncomingRequest(dynamic requestData) async {
+  Future<void> _processIncomingRequest(dynamic incomingData) async {
     // Asegurarse que el widget esté montado y que el conductor esté en servicio
     // y no tenga un viaje activo.
+    // print(incomingData); // Puedes mantener o quitar este print
     if (!mounted || !_isOnDuty || _tripProvider.activeTrip != null) {
       print(
         "Ignorando request entrante (UI): mounted=$mounted, isOnDuty=$_isOnDuty, activeTrip=${_tripProvider.activeTrip != null}",
@@ -994,36 +1008,64 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       return;
     }
 
+    TripRequest?
+    request; // Variable para guardar la solicitud parseada/recibida
+
     try {
-      // Asegurarse que requestData es un Map
-      if (requestData is! Map<String, dynamic>) {
-        // Si viene del background service, puede ser un JSON string
-        if (requestData is Map && requestData.containsKey('request')) {
-          requestData = jsonDecode(requestData['request']);
+      // Verificar el tipo de dato recibido
+      if (incomingData is TripRequest) {
+        // Ya es un objeto TripRequest (viene de la suscripción directa de la UI)
+        request = incomingData;
+        print('Procesando TripRequest recibido directamente: ${request.id}');
+      } else if (incomingData is Map) {
+        // Podría ser un Map directamente o un Map que contiene JSON string del BG service
+        Map<String, dynamic> requestDataMap;
+        if (incomingData.containsKey('request') &&
+            incomingData['request'] is String) {
+          // Es el Map del BG service, decodificar el JSON string
+          requestDataMap = jsonDecode(incomingData['request']);
+          print('Procesando Map decodificado del BG Service...');
+        } else if (incomingData.keys.isNotEmpty) {
+          // Asumir que es un Map directo con los datos (menos probable ahora)
+          requestDataMap = Map<String, dynamic>.from(incomingData);
+          print('Procesando Map recibido directamente...');
         } else {
-          print(
-            'Error: _processIncomingRequest recibió datos inesperados: ${requestData.runtimeType}',
-          );
+          print('Error: _processIncomingRequest recibió un Map vacío.');
           return;
         }
+        // Parsear el Map a TripRequest
+        request = TripRequest.fromJson(requestDataMap);
+        print('TripRequest parseado desde Map: ${request.id}');
+      } else {
+        // Tipo de dato inesperado
+        print(
+          'Error: _processIncomingRequest recibió datos inesperados: ${incomingData.runtimeType}',
+        );
+        return;
       }
 
-      final request = TripRequest.fromJson(requestData);
+      // --- Ahora 'request' contiene el objeto TripRequest ---
 
-      // Validaciones adicionales
-      if (request.status != TRIP_STATUS_BROADCASTING ||
+      // Validaciones adicionales usando el objeto 'request'
+      if (request == null || // Chequeo extra por si acaso
+          request.status != TRIP_STATUS_BROADCASTING ||
           _tripProvider.hasPendingRequest(request.id) ||
           _rejectedRequests.contains(request.id)) {
         print(
-          'Solicitud (UI) ignorada: ${request.id} (status: ${request.status}, ya existe o rechazada)',
+          'Solicitud (UI) ignorada: ${request?.id} (status: ${request?.status}, ya existe o rechazada)',
         );
+        _tripProvider.setLoading(
+          false,
+        ); // Asegúrate de quitar el loading si se ignora
         return;
       }
 
       print('Procesando nueva solicitud válida (UI): ${request.id}');
 
       // Mostrar indicador de carga en la UI
-      _tripProvider.setLoading(true);
+      _tripProvider.setLoading(
+        true,
+      ); // Mover esto aquí, después de validaciones
 
       // Calcular ruta (esto podría hacerse opcionalmente aquí o mostrar la solicitud inmediatamente)
       final route = await _calculateRoute(
@@ -1032,27 +1074,41 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         request.trip_stops ?? [],
       );
 
-      // Actualizar el provider con la nueva solicitud y ruta
+      print(
+        '[DriverHome] Ruta calculada para solicitud ${request.id}. Polyline tiene ${route['polyline']?.length ?? 0} puntos.',
+      );
+
+      // Añadir la solicitud pendiente al provider
       _tripProvider.setNewPendingRequest(request, route);
 
-      // Reproducir sonido y mostrar notificación (si la app está en primer plano)
-      // La notificación del BG ya debería haber sonado/vibrado
-      await _playNotificationSound(); // Reproducir sonido en la app también
-      // Opcional: Mostrar una notificación Heads-Up si la app está abierta pero inactiva?
-      // await _showNotification('¡Nueva solicitud!', 'Origen: ${request.origin}');
+      // Reproducir sonido de notificación
+      await _playNotificationSound();
+
+      // Actualizar cámara del mapa
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _updateMapCamera();
+        }
+      });
     } catch (e, s) {
-      print('Error procesando solicitud entrante (UI): $e\n$s');
+      print('Error en _processIncomingRequest: $e\n$s');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Error al procesar nueva solicitud.'),
+          SnackBar(
+            content: Text('Error al procesar solicitud: ${e.toString()}'),
             backgroundColor: Colors.red,
           ),
         );
       }
+      _tripProvider.setLoading(
+        false,
+      ); // Asegúrate de quitar el loading en caso de error
+      _tripProvider.clearPendingRequests(); // Limpiar si hubo error procesando
     } finally {
-      // Asegurarse de quitar el indicador de carga
-      _tripProvider.setLoading(false);
+      // Quitar indicador de carga si aún está activo (aunque ya se maneja en los return/catch)
+      if (_tripProvider.isLoading) {
+        _tripProvider.setLoading(false);
+      }
     }
   }
 
@@ -2004,6 +2060,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       print('Error reproduciendo sonido desde raw: $e');
       // Fallback a assets si falla el raw
       try {
+        // Asegúrate que la ruta 'assets/sounds/notification_sound.mp3' es correcta
+        // y que está declarada en pubspec.yaml
         await _audioPlayer.play(AssetSource('sounds/notification_sound.mp3'));
         print("Reproduciendo sonido de notificación (desde assets).");
       } catch (e2) {

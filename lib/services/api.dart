@@ -364,6 +364,10 @@ class TripRequest {
   final String? observations;
   final String createdAt;
   final List<TripStop>? trip_stops;
+  final double searchRadius;
+  final double currentRadius;
+  final List<String> notifiedDrivers;
+  final String vehicleType;
 
   TripRequest({
     required this.id,
@@ -380,15 +384,25 @@ class TripRequest {
     this.observations,
     required this.createdAt,
     this.trip_stops,
+    required this.searchRadius,
+    required this.currentRadius,
+    required this.notifiedDrivers,
+    required this.vehicleType,
   });
 
   factory TripRequest.fromJson(Map<String, dynamic> json) {
     List<TripStop>? stops;
-    if (json['trip_stops'] != null) {
+    if (json['trip_stops'] != null && json['trip_stops'] is List) {
       stops =
           (json['trip_stops'] as List)
               .map((stop) => TripStop.fromJson(stop))
               .toList();
+    }
+
+    // Asegurarse de que notified_drivers sea una lista de Strings
+    List<String> drivers = [];
+    if (json['notified_drivers'] != null && json['notified_drivers'] is List) {
+      drivers = List<String>.from(json['notified_drivers']);
     }
 
     return TripRequest(
@@ -396,16 +410,26 @@ class TripRequest {
       createdBy: json['created_by'],
       origin: json['origin'],
       destination: json['destination'],
-      originLat: json['origin_lat'].toDouble(),
-      originLng: json['origin_lng'].toDouble(),
-      destinationLat: json['destination_lat'].toDouble(),
-      destinationLng: json['destination_lng'].toDouble(),
-      price: json['price'].toDouble(),
+      originLat: (json['origin_lat'] as num).toDouble(),
+      originLng: (json['origin_lng'] as num).toDouble(),
+      destinationLat: (json['destination_lat'] as num).toDouble(),
+      destinationLng: (json['destination_lng'] as num).toDouble(),
+      price: (json['price'] as num).toDouble(),
       status: json['status'],
       passengerPhone: json['passenger_phone'],
       observations: json['observations'],
       createdAt: json['created_at'],
       trip_stops: stops,
+      searchRadius:
+          (json['search_radius'] as num?)?.toDouble() ??
+          3000.0, // Valor por defecto si es nulo
+      currentRadius:
+          (json['current_radius'] as num?)?.toDouble() ??
+          (json['search_radius'] as num?)?.toDouble() ??
+          3000.0, // Usar search_radius si current es nulo
+      notifiedDrivers: drivers,
+      vehicleType:
+          json['vehicle_type'] ?? '4_ruedas', // Valor por defecto si es nulo
     );
   }
 
@@ -425,6 +449,10 @@ class TripRequest {
       'observations': observations,
       'created_at': createdAt,
       'trip_stops': trip_stops?.map((stop) => stop.toJson()).toList(),
+      'search_radius': searchRadius,
+      'current_radius': currentRadius,
+      'notified_drivers': notifiedDrivers,
+      'vehicle_type': vehicleType,
     };
   }
 }
@@ -1392,84 +1420,214 @@ class TripRequestService {
 
   RealtimeChannel subscribeToDriverRequests(
     String driverId,
-    Function(Map<String, dynamic>) onRequest,
+    String? driverVehicleType,
+    Function(TripRequest) onRequest,
     Function(dynamic) onError,
   ) {
     try {
       print('Configurando suscripción para conductor: $driverId');
 
-      final channelName = 'driver_requests_$driverId';
+      final channelName = 'driver_requests';
       final channel = supabase.channel(channelName);
 
       channel
           .onPostgresChanges(
-            event: PostgresChangeEvent.insert,
+            event: PostgresChangeEvent.all,
             schema: 'public',
             table: 'trip_requests',
-            callback: (payload) {
-              print('Recibida nueva solicitud: ${payload.toString()}');
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'status',
+              value: 'broadcasting',
+            ),
+            callback: (payload) async {
+              try {
+                print('Payload recibido: ${payload.eventType}');
+                Map<String, dynamic>? requestData;
 
-              // Verificar si es una solicitud en broadcasting
-              if (payload.newRecord['status'] == 'broadcasting') {
-                // Verificar si el conductor está dentro del radio de búsqueda
-                final originLat = payload.newRecord['origin_lat'] as double;
-                final originLng = payload.newRecord['origin_lng'] as double;
-                final searchRadius =
-                    payload.newRecord['search_radius'] as double;
-                final vehicleType = payload.newRecord['vehicle_type'] as String;
+                if (payload.eventType == PostgresChangeEvent.update) {
+                  final oldRecord = payload.oldRecord;
+                  final newRecord = payload.newRecord;
+                  if (oldRecord['current_radius'] ==
+                      newRecord['current_radius']) {
+                    print('Actualización ignorada: current_radius no cambió.');
+                    return;
+                  }
+                  requestData = newRecord;
+                } else if (payload.eventType == PostgresChangeEvent.insert) {
+                  requestData = payload.newRecord;
+                } else {
+                  return;
+                }
 
-                // Obtener la ubicación actual del conductor
-                supabase
-                    .from('driver_profiles')
-                    .select()
-                    .eq('id', driverId)
-                    .single()
-                    .then((driverData) {
-                      if (driverData != null &&
-                          driverData['latitude'] != null &&
-                          driverData['longitude'] != null &&
-                          driverData['vehicle_type'] == vehicleType) {
-                        final driverLat = driverData['latitude'] as double;
-                        final driverLng = driverData['longitude'] as double;
+                if (requestData == null ||
+                    requestData['status'] != 'broadcasting') {
+                  return;
+                }
 
-                        // Calcular distancia
-                        final distance = calculateDistance(
-                          originLat,
-                          originLng,
-                          driverLat,
-                          driverLng,
-                        );
+                final requestId = requestData['id'] as String;
 
-                        // Si está dentro del radio, procesar la solicitud
-                        if (distance <= searchRadius) {
-                          onRequest(payload.newRecord);
-                        }
-                      }
-                    });
+                final driverProfileResponse =
+                    await supabase
+                        .from('driver_profiles')
+                        .select(
+                          'latitude, longitude, is_special, is_on_duty, vehicle_type',
+                        )
+                        .eq('id', driverId)
+                        .maybeSingle();
+
+                if (driverProfileResponse == null) {
+                  print('Perfil de conductor no encontrado para $driverId');
+                  return;
+                }
+
+                final driverLat = driverProfileResponse['latitude'] as double?;
+                final driverLng = driverProfileResponse['longitude'] as double?;
+                final isOnDuty =
+                    driverProfileResponse['is_on_duty'] as bool? ?? false;
+                final isSpecial =
+                    driverProfileResponse['is_special'] as bool? ?? false;
+                final vehicleTypeMatches =
+                    driverProfileResponse['vehicle_type'] ==
+                    requestData['vehicle_type'];
+
+                if (!isOnDuty) {
+                  print('Conductor $driverId no está en servicio.');
+                  return;
+                }
+                if (driverLat == null || driverLng == null) {
+                  print('Conductor $driverId no tiene ubicación registrada.');
+                  return;
+                }
+                if (!vehicleTypeMatches) {
+                  print(
+                    'Tipo de vehículo no coincide: Solicitud (${requestData['vehicle_type']}), Conductor (${driverProfileResponse['vehicle_type']})',
+                  );
+                  return;
+                }
+
+                final fullRequestResponse =
+                    await supabase
+                        .from('trip_requests')
+                        .select('*, trip_stops(*)')
+                        .eq('id', requestId)
+                        .single();
+
+                final TripRequest fullRequest = TripRequest.fromJson(
+                  fullRequestResponse,
+                );
+
+                final originLat = fullRequest.originLat;
+                final originLng = fullRequest.originLng;
+                final currentRadius = fullRequest.currentRadius;
+
+                final distance = calculateDistance(
+                  originLat,
+                  originLng,
+                  driverLat,
+                  driverLng,
+                );
+
+                print(
+                  'Distancia calculada para $requestId: ${distance.toStringAsFixed(2)}m, Radio actual: ${currentRadius}m',
+                );
+
+                if (distance <= currentRadius) {
+                  print(
+                    'Conductor $driverId DENTRO del radio para $requestId.',
+                  );
+
+                  if (isSpecial) {
+                    print(
+                      'Conductor especial $driverId notificado inmediatamente.',
+                    );
+                    onRequest(fullRequest);
+                  } else {
+                    print('Conductor no especial $driverId. Esperando 10s...');
+                    await Future.delayed(const Duration(seconds: 10));
+
+                    final checkStatusResponse =
+                        await supabase
+                            .from('trip_requests')
+                            .select('status')
+                            .eq('id', requestId)
+                            .maybeSingle();
+
+                    if (checkStatusResponse != null &&
+                        checkStatusResponse['status'] == 'broadcasting') {
+                      print(
+                        'Conductor no especial $driverId notificado después de 10s.',
+                      );
+                      onRequest(fullRequest);
+                    } else {
+                      print(
+                        'Solicitud $requestId ya no está en broadcasting después de 10s.',
+                      );
+                    }
+                  }
+
+                  final currentNotified = List<String>.from(
+                    fullRequest.notifiedDrivers,
+                  );
+                  if (!currentNotified.contains(driverId)) {
+                    print(
+                      'Añadiendo conductor $driverId a notified_drivers para $requestId',
+                    );
+                    final updatedDrivers = [...currentNotified, driverId];
+                    try {
+                      await supabase
+                          .from('trip_requests')
+                          .update({'notified_drivers': updatedDrivers})
+                          .eq('id', requestId)
+                          .eq('status', 'broadcasting');
+                    } catch (updateError) {
+                      print(
+                        "Error actualizando notified_drivers para $requestId: $updateError",
+                      );
+                    }
+                  }
+                } else {
+                  print(
+                    'Conductor $driverId FUERA del radio para $requestId (${distance.toStringAsFixed(2)}m > ${currentRadius}m).',
+                  );
+                }
+              } catch (e, stackTrace) {
+                print('Error procesando payload de solicitud: $e');
+                print('Stack trace: $stackTrace');
               }
             },
           )
-          .subscribe();
+          .subscribe((status, [error]) {
+            if (status == RealtimeSubscribeStatus.subscribed) {
+              print('Suscripción a $channelName exitosa para $driverId.');
+            } else if (status == RealtimeSubscribeStatus.closed) {
+              print('Suscripción a $channelName cerrada.');
+            } else if (status == RealtimeSubscribeStatus.channelError) {
+              print('Error en canal $channelName: $error');
+              onError(error ?? Exception('Error desconocido en el canal'));
+            } else if (status == RealtimeSubscribeStatus.timedOut) {
+              print('Suscripción a $channelName timed out.');
+              onError(Exception('Suscripción timed out'));
+            }
+          });
 
       return channel;
     } catch (e) {
-      print('Error configurando suscripción: $e');
+      print('Error configurando suscripción general: $e');
       onError(e);
-      return supabase.channel('error_channel');
+      return supabase.channel(
+        'error_channel_${DateTime.now().millisecondsSinceEpoch}',
+      );
     }
   }
 
   void unsubscribeFromDriverRequests(RealtimeChannel channel) {
     try {
-      //print('Cancelando suscripción a solicitudes');
       supabase.removeChannel(channel);
     } catch (e) {
-      //print('Error removing request subscription: $e');
       try {
         channel.unsubscribe();
-      } catch (e) {
-        //print('Error en segundo intento de cancelación: $e');
-      }
+      } catch (e) {}
     }
   }
 
@@ -1498,7 +1656,6 @@ class TripRequestService {
 
       return result;
     } catch (e) {
-      // Si falla la confirmación, intentar liberar la solicitud
       await releaseRequest(requestId);
       debugPrint('Error confirmando aceptación: $e');
       rethrow;
@@ -1519,7 +1676,6 @@ class TripRequestService {
 
   Future<Map<String, dynamic>> broadcastRequest(String requestId) async {
     try {
-      // Primero obtener los detalles de la solicitud
       final request =
           await supabase
               .from('trip_requests')
@@ -1531,7 +1687,6 @@ class TripRequestService {
         throw Exception('Solicitud no encontrada');
       }
 
-      // Obtener conductores especiales disponibles
       final specialDrivers = await supabase.rpc(
         'get_available_drivers_in_radius',
         params: {
@@ -1545,7 +1700,6 @@ class TripRequestService {
       );
 
       if ((specialDrivers as List).isNotEmpty) {
-        // Actualizar la lista de conductores notificados
         final driverIds =
             (specialDrivers as List).map((d) => d['driver_id']).toList();
         await supabase
@@ -1558,11 +1712,9 @@ class TripRequestService {
             })
             .eq('id', requestId);
 
-        // Esperar 10 segundos antes de notificar al resto
         await Future.delayed(const Duration(seconds: 10));
       }
 
-      // Obtener conductores regulares disponibles
       final regularDrivers = await supabase.rpc(
         'get_available_drivers_in_radius',
         params: {
@@ -1576,7 +1728,6 @@ class TripRequestService {
       );
 
       if ((regularDrivers as List).isNotEmpty) {
-        // Actualizar la lista de conductores notificados
         final driverIds =
             (regularDrivers as List).map((d) => d['driver_id']).toList();
         await supabase
@@ -1598,7 +1749,6 @@ class TripRequestService {
             regularDrivers != null ? (regularDrivers as List).length : 0,
       };
     } catch (e) {
-      //print('Error broadcasting request: $e');
       rethrow;
     }
   }
@@ -1607,7 +1757,6 @@ class TripRequestService {
     String requestId,
   ) async {
     try {
-      // Primero obtener la solicitud y sus paradas
       final request =
           await supabase
               .from('trip_requests')
@@ -1622,7 +1771,6 @@ class TripRequestService {
         throw Exception('Solo se pueden cancelar solicitudes en broadcasting');
       }
 
-      // Crear un viaje cancelado para mantener el registro
       final trip =
           await supabase
               .from('trips')
@@ -1644,7 +1792,6 @@ class TripRequestService {
               .select()
               .single();
 
-      // Crear una nueva solicitud rechazada que mantendrá las paradas
       final newRequest =
           await supabase
               .from('trip_requests')
@@ -1666,7 +1813,6 @@ class TripRequestService {
               .select()
               .single();
 
-      // Si la solicitud tenía paradas, crear nuevas paradas para la nueva solicitud
       if (request['trip_stops'] != null &&
           (request['trip_stops'] as List).isNotEmpty) {
         final stopsToInsert =
@@ -1685,7 +1831,6 @@ class TripRequestService {
         await supabase.from('trip_stops').insert(stopsToInsert);
       }
 
-      // Actualizar el estado de la solicitud original a rejected
       await supabase
           .from('trip_requests')
           .update({'status': 'rejected'})
@@ -1697,14 +1842,12 @@ class TripRequestService {
         'trip_stops': request['trip_stops'],
       };
     } catch (e) {
-      //print('Error cancelling broadcasting request: $e');
       rethrow;
     }
   }
 
   Future<Map<String, dynamic>> convertRequestToTrip(String requestId) async {
     try {
-      // Primero obtenemos los datos de la solicitud para asegurarnos de tener el driver_id
       final request =
           await supabase
               .from('trip_requests')
@@ -1712,25 +1855,21 @@ class TripRequestService {
               .eq('id', requestId)
               .single();
 
-      // Verificar que tenemos el driver_id
       if (request['driver_id'] == null) {
         throw Exception('La solicitud no tiene un conductor asignado');
       }
 
-      // Llamar a la función de la base de datos con los datos completos
       final data = await supabase.rpc(
         'convert_request_to_trip',
         params: {'request_id': requestId},
       );
 
-      // Asegurarnos que el phone_number se incluye en los datos devueltos
       return {
         ...data,
         'phone_number': request['phone_number'],
         'driver_id': request['driver_id'],
       };
     } catch (e) {
-      //print('Error converting request to trip: $e');
       rethrow;
     }
   }
@@ -1741,7 +1880,6 @@ class TripRequestService {
     Function(dynamic) onError,
   ) {
     try {
-      // Crear un nombre de canal único para este viaje
       final channelName =
           'trip_updates_${tripId}_${DateTime.now().millisecondsSinceEpoch}';
 
@@ -1764,7 +1902,6 @@ class TripRequestService {
           )
           .subscribe((status, [error]) {
             if (status == RealtimeSubscribeStatus.subscribed) {
-              //print('Suscripción exitosa al viaje $tripId');
             } else if (status == RealtimeSubscribeStatus.closed ||
                 status == RealtimeSubscribeStatus.channelError) {
               onError(Exception('Error subscribing to trip updates: $status'));
@@ -1773,25 +1910,18 @@ class TripRequestService {
 
       return channel;
     } catch (e) {
-      //print('Error setting up subscription: $e');
       onError(e);
-      // Devolver un canal vacío que podemos desuscribir de forma segura
       return supabase.channel('error_channel');
     }
   }
 
   void unsubscribeFromTripUpdates(RealtimeChannel channel) {
     try {
-      //print('Cancelando suscripción al canal');
       supabase.removeChannel(channel);
     } catch (e) {
-      //print('Error removing subscription: $e');
-      // Intentar una segunda vez con un enfoque diferente
       try {
         channel.unsubscribe();
-      } catch (innerError) {
-        //print('Error en segundo intento de cancelación: $innerError');
-      }
+      } catch (innerError) {}
     }
   }
 
@@ -1801,8 +1931,6 @@ class TripRequestService {
     String userId,
   ) async {
     try {
-      // Primero verificar si el viaje existe y puede ser cancelado
-
       final data =
           await supabase
               .from('trips')
@@ -1848,7 +1976,6 @@ class TripRequestService {
           )
           .subscribe((status, [error]) {
             if (status == RealtimeSubscribeStatus.subscribed) {
-              //print('Suscripción exitosa a actualizaciones de viajes');
             } else if (status == RealtimeSubscribeStatus.closed ||
                 status == RealtimeSubscribeStatus.channelError) {
               onError(Exception('Error en la suscripción'));
@@ -1857,7 +1984,6 @@ class TripRequestService {
 
       return channel;
     } catch (e) {
-      //print('Error al crear suscripción: $e');
       rethrow;
     }
   }
@@ -1936,7 +2062,6 @@ class AnalyticsService {
 
   Future<Map<String, int>> getAdminDashboardStats() async {
     try {
-      // Obtener la fecha de inicio (00:00:00) y fin (23:59:59) del día actual
       final today = DateTime.now();
       final startOfDay =
           DateTime(today.year, today.month, today.day).toIso8601String();
@@ -1951,7 +2076,6 @@ class AnalyticsService {
             999,
           ).toIso8601String();
 
-      // Obtener viajes completados de hoy
       final tripsToday = await supabase
           .from('trips')
           .select('*')
@@ -1960,7 +2084,6 @@ class AnalyticsService {
           .lte('created_at', endOfDay)
           .count(CountOption.exact);
 
-      // Obtener choferes activos
       final activeDrivers = await supabase
           .from('driver_profiles')
           .select('''
@@ -1971,7 +2094,6 @@ class AnalyticsService {
           .eq('is_on_duty', true)
           .count(CountOption.exact);
 
-      // Obtener total de usuarios
       final totalUsers = await supabase
           .from('users')
           .select('*')
@@ -1984,7 +2106,6 @@ class AnalyticsService {
         'totalUsers': totalUsers.count,
       };
     } catch (e) {
-      //print('Error fetching dashboard stats: $e');
       rethrow;
     }
   }
@@ -1994,7 +2115,6 @@ class AnalyticsService {
     String timeFrame,
   ) async {
     try {
-      // Calcular fechas correctamente
       final now = DateTime.now();
       DateTime startDate;
 
@@ -2012,7 +2132,6 @@ class AnalyticsService {
           startDate = DateTime(now.year, now.month, now.day);
       }
 
-      // Consulta con filtros de fecha
       final trips = await supabase
           .from('trips')
           .select()
@@ -2020,7 +2139,6 @@ class AnalyticsService {
           .gte('created_at', startDate.toIso8601String())
           .lte('created_at', now.toIso8601String());
 
-      // Consulta del perfil del conductor activo
       final driver =
           await supabase
               .from('driver_profiles')
@@ -2032,7 +2150,6 @@ class AnalyticsService {
               .eq('users.active', true)
               .single();
 
-      // Calcular estadísticas
       final totalTrips = trips.length;
       final totalEarnings = trips.fold<double>(
         0,
@@ -2046,7 +2163,6 @@ class AnalyticsService {
         'balance': balance,
       };
     } catch (e) {
-      //print('Error en getDriverTripStats: $e');
       rethrow;
     }
   }
@@ -2058,7 +2174,6 @@ class AnalyticsService {
     String? operatorId,
   }) async {
     try {
-      // Primero hacer la consulta básica sin filtros
       var query = supabase
           .from('trips')
           .select('''
@@ -2079,7 +2194,6 @@ class AnalyticsService {
           ''')
           .eq('status', 'completed');
 
-      // Luego aplicar los filtros
       if (startDate != null) {
         query = query.gte('created_at', startDate);
       }
@@ -2093,10 +2207,8 @@ class AnalyticsService {
         query = query.eq('created_by', operatorId);
       }
 
-      // Ejecutar la consulta con el orden
       final response = await query.order('created_at', ascending: false);
 
-      // Transformar los datos para mantener la estructura esperada
       return response
           .map(
             (trip) => {
@@ -2106,7 +2218,6 @@ class AnalyticsService {
           )
           .toList();
     } catch (e) {
-      //print('Error en getCompletedTrips: $e');
       rethrow;
     }
   }
@@ -2180,7 +2291,6 @@ class AnalyticsService {
 
     final response = await query.order('created_at', ascending: false);
 
-    // Transformar los datos para mantener la estructura esperada
     final transformedData =
         response
             .map(
