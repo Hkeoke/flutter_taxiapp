@@ -13,13 +13,34 @@ class OperatorReportsScreen extends StatefulWidget {
 
 class _OperatorReportsScreenState extends State<OperatorReportsScreen> {
   bool loading = false;
+  bool initialLoad = true;
   List<Trip> trips = [];
-  DateTime startDate = DateTime.now().subtract(const Duration(days: 30));
-  DateTime endDate = DateTime.now();
-  bool showOperators = false;
   List<OperatorProfile> operators = [];
+  DateTime startDate = DateTime.now().subtract(const Duration(days: 7));
+  DateTime endDate = DateTime.now();
   OperatorProfile? selectedOperator;
+  bool showOperators = false;
   String searchTerm = '';
+  final TextEditingController searchController = TextEditingController();
+
+  final Color primaryColor = Colors.red;
+  final Color scaffoldBackgroundColor = Colors.grey.shade100;
+  final Color cardBackgroundColor = Colors.white;
+  final Color textColorPrimary = Colors.black87;
+  final Color textColorSecondary = Colors.grey.shade600;
+  final Color iconColor = Colors.red;
+  final Color inputIconColor = Colors.grey.shade500;
+  final Color borderColor = Colors.grey.shade300;
+  final Color errorColor = Colors.red.shade700;
+  final Color successColor = Colors.green.shade600;
+  final Color filterBackgroundColor = Colors.white;
+
+  final DateFormat _displayDateFormat = DateFormat("d MMM, yyyy", 'es');
+  final DateFormat _apiDateFormat = DateFormat("yyyy-MM-dd");
+  final currencyFormatter = NumberFormat.currency(
+    locale: 'es_MX',
+    symbol: '\$',
+  );
 
   @override
   void initState() {
@@ -27,50 +48,98 @@ class _OperatorReportsScreenState extends State<OperatorReportsScreen> {
     _loadOperators();
   }
 
+  @override
+  void dispose() {
+    searchController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadOperators() async {
     try {
       final operatorService = OperatorService();
       final data = await operatorService.getAllOperators();
-      setState(() {
-        operators = data;
-      });
+      if (mounted) {
+        setState(() {
+          operators = data;
+          operators.sort(
+            (a, b) => '${a.first_name} ${a.last_name}'.compareTo(
+              '${b.first_name} ${b.last_name}',
+            ),
+          );
+        });
+      }
     } catch (error) {
       developer.log('Error al cargar operadores: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al cargar lista de operadores'),
+            backgroundColor: errorColor,
+          ),
+        );
+      }
     }
   }
 
   Future<void> _fetchTrips() async {
-    try {
-      setState(() {
-        loading = true;
-      });
+    if (selectedOperator == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Por favor, seleccione un operador'),
+          backgroundColor: Colors.orange.shade700,
+        ),
+      );
+      return;
+    }
 
+    setState(() {
+      loading = true;
+      initialLoad = false;
+    });
+
+    try {
       final analyticsService = AnalyticsService();
       final data = await analyticsService.getOperatorCompletedTrips(
-        startDate.toIso8601String(),
-        endDate.toIso8601String(),
-        selectedOperator?.id,
+        _apiDateFormat.format(startDate),
+        _apiDateFormat.format(endDate),
+        selectedOperator!.id,
       );
 
-      setState(() {
-        trips = data.map((tripData) => Trip.fromJson(tripData)).toList();
-        loading = false;
-      });
+      if (mounted) {
+        setState(() {
+          trips = data.map((tripData) => Trip.fromJson(tripData)).toList();
+          trips.sort(
+            (a, b) => DateTime.parse(
+              b.createdAt,
+            ).compareTo(DateTime.parse(a.createdAt)),
+          );
+          loading = false;
+        });
+      }
     } catch (error) {
       developer.log('Error al obtener viajes: $error');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudieron cargar los viajes')),
-      );
-      setState(() {
-        loading = false;
-      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudieron cargar los viajes'),
+            backgroundColor: errorColor,
+          ),
+        );
+        setState(() {
+          loading = false;
+          trips = [];
+        });
+      }
     }
   }
 
   List<OperatorProfile> get filteredOperators {
+    if (searchTerm.isEmpty) {
+      return operators;
+    }
     return operators.where((operator) {
       final fullName =
-          '${operator.firstName} ${operator.lastName}'.toLowerCase();
+          '${operator.first_name} ${operator.last_name}'.toLowerCase();
       return fullName.contains(searchTerm.toLowerCase());
     }).toList();
   }
@@ -78,11 +147,19 @@ class _OperatorReportsScreenState extends State<OperatorReportsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('Reportes de Operadores'),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        elevation: 0,
+        title: const Text(
+          'Reportes por Operador',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        backgroundColor: cardBackgroundColor,
+        foregroundColor: textColorPrimary,
+        elevation: 1.0,
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back, color: iconColor),
+          onPressed: () => Navigator.pop(context),
+        ),
       ),
       body: Column(
         children: [_buildFiltersSection(), Expanded(child: _buildTripsList())],
@@ -93,138 +170,166 @@ class _OperatorReportsScreenState extends State<OperatorReportsScreen> {
   Widget _buildFiltersSection() {
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
+      decoration: BoxDecoration(
+        color: filterBackgroundColor,
+        border: Border(bottom: BorderSide(color: borderColor)),
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          // Filtros de fecha
           Row(
             children: [
               Expanded(
-                child: _buildDatePicker(
-                  'Desde',
-                  startDate,
-                  (date) => setState(() => startDate = date),
+                child: _buildFilterSelectorButton(
+                  icon: LucideIcons.calendarDays,
+                  label: _displayDateFormat.format(startDate),
+                  onTap: () => _selectDate(context, true),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Expanded(
-                child: _buildDatePicker(
-                  'Hasta',
-                  endDate,
-                  (date) => setState(() => endDate = date),
+                child: _buildFilterSelectorButton(
+                  icon: LucideIcons.calendarDays,
+                  label: _displayDateFormat.format(endDate),
+                  onTap: () => _selectDate(context, false),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 12),
-
-          // Filtro de operador y botón de búsqueda
           Row(
             children: [
-              Expanded(child: _buildOperatorSelector()),
-              const SizedBox(width: 8),
-              _buildSearchButton(),
+              Expanded(
+                child: _buildFilterSelectorButton(
+                  icon: LucideIcons.user,
+                  label:
+                      selectedOperator != null
+                          ? '${selectedOperator!.first_name} ${selectedOperator!.last_name}'
+                          : 'Seleccionar Operador',
+                  isSelected: selectedOperator != null,
+                  onTap: _showOperatorSelectionModal,
+                  onClear:
+                      selectedOperator != null
+                          ? () => setState(() => selectedOperator = null)
+                          : null,
+                ),
+              ),
+              const SizedBox(width: 10),
+              SizedBox(
+                height: 44,
+                child: ElevatedButton.icon(
+                  icon:
+                      loading
+                          ? Container(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                          : Icon(LucideIcons.search, size: 18),
+                  label: Text('Buscar'),
+                  onPressed: loading ? null : _fetchTrips,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: primaryColor,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                  ),
+                ),
+              ),
             ],
           ),
 
-          // Dropdown de operadores
-          if (showOperators) _buildOperatorsDropdown(),
+          if (showOperators)
+            _buildSelectionModal<OperatorProfile>(
+              context: context,
+              title: 'Seleccionar Operador',
+              items: operators,
+              filteredItemsBuilder:
+                  (query) =>
+                      operators.where((op) {
+                        final name =
+                            '${op.first_name} ${op.last_name}'.toLowerCase();
+                        return name.contains(query.toLowerCase());
+                      }).toList(),
+              itemBuilder:
+                  (operator) => ListTile(
+                    title: Text('${operator.first_name} ${operator.last_name}'),
+                    selected: selectedOperator?.id == operator.id,
+                    selectedTileColor: primaryColor.withOpacity(0.1),
+                    onTap: () {
+                      setState(() {
+                        selectedOperator = operator;
+                        showOperators = false;
+                        searchController.clear();
+                      });
+                    },
+                  ),
+              searchController: searchController,
+              onSearchChanged: (value) => setState(() {}),
+              onClose: () => setState(() => showOperators = false),
+              onClear: () => setState(() => selectedOperator = null),
+              selectedItem: selectedOperator,
+              itemNameBuilder: (op) => '${op.first_name} ${op.last_name}',
+            ),
         ],
       ),
     );
   }
 
-  Widget _buildDatePicker(
-    String label,
-    DateTime value,
-    Function(DateTime) onChanged,
-  ) {
+  Widget _buildFilterSelectorButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    bool isSelected = true,
+    VoidCallback? onClear,
+  }) {
     return InkWell(
-      onTap: () async {
-        final DateTime? picked = await showDatePicker(
-          context: context,
-          initialDate: value,
-          firstDate: DateTime(2000),
-          lastDate: DateTime(2101),
-        );
-        if (picked != null && picked != value) {
-          onChanged(picked);
-        }
-      },
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
       child: Container(
         height: 44,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
-          color: const Color(0xFFF8FAFC),
-          borderRadius: BorderRadius.circular(8),
-          border: const Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: borderColor),
         ),
         child: Row(
           children: [
-            Icon(
-              LucideIcons.calendar,
-              size: 20,
-              color: const Color(0xFFDC2626),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              DateFormat('dd/MM/yyyy').format(value),
-              style: const TextStyle(fontSize: 14, color: Color(0xFF0F172A)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOperatorSelector() {
-    return InkWell(
-      onTap: () {
-        setState(() {
-          showOperators = !showOperators;
-        });
-      },
-      child: Container(
-        height: 44,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF8FAFC),
-          borderRadius: BorderRadius.circular(8),
-          border: const Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
-        ),
-        child: Row(
-          children: [
-            Icon(LucideIcons.user, size: 20, color: const Color(0xFFDC2626)),
+            Icon(icon, size: 18, color: inputIconColor),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                selectedOperator != null
-                    ? '${selectedOperator!.firstName} ${selectedOperator!.lastName}'
-                    : 'Seleccionar Operador',
+                label,
                 style: TextStyle(
                   fontSize: 14,
                   color:
-                      selectedOperator != null
-                          ? const Color(0xFF0F172A)
-                          : const Color(0xFF94A3B8),
+                      isSelected
+                          ? textColorPrimary
+                          : textColorSecondary.withOpacity(0.7),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ),
-            if (selectedOperator != null)
-              GestureDetector(
-                onTap: () {
-                  setState(() {
-                    selectedOperator = null;
-                  });
-                },
+            if (onClear != null)
+              InkWell(
+                onTap: onClear,
                 child: Icon(
-                  LucideIcons.x,
-                  size: 16,
-                  color: const Color(0xFFEF4444),
+                  LucideIcons.circleX,
+                  size: 14,
+                  color: errorColor.withOpacity(0.7),
                 ),
+              )
+            else
+              Icon(
+                LucideIcons.chevronDown,
+                size: 16,
+                color: textColorSecondary,
               ),
           ],
         ),
@@ -232,112 +337,188 @@ class _OperatorReportsScreenState extends State<OperatorReportsScreen> {
     );
   }
 
-  Widget _buildSearchButton() {
-    return InkWell(
-      onTap: loading ? null : _fetchTrips,
-      child: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Center(
-          child:
-              loading
-                  ? const CircularProgressIndicator(color: Color(0xFFDC2626))
-                  : Icon(
-                    LucideIcons.search,
-                    size: 24,
-                    color: const Color(0xFFDC2626),
-                  ),
-        ),
-      ),
-    );
-  }
+  Widget _buildSelectionModal<T>({
+    required BuildContext context,
+    required String title,
+    required List<T> items,
+    required List<T> Function(String) filteredItemsBuilder,
+    required Widget Function(T) itemBuilder,
+    required TextEditingController searchController,
+    required ValueChanged<String> onSearchChanged,
+    required VoidCallback onClose,
+    required VoidCallback onClear,
+    required T? selectedItem,
+    required String Function(T) itemNameBuilder,
+  }) {
+    final filteredItems = filteredItemsBuilder(searchController.text);
 
-  Widget _buildOperatorsDropdown() {
-    return Container(
-      margin: const EdgeInsets.only(top: 4),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: const Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: TextField(
-              decoration: const InputDecoration(
-                hintText: 'Buscar operador...',
-                hintStyle: TextStyle(color: Color(0xFF94A3B8)),
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.zero,
-              ),
-              style: const TextStyle(fontSize: 14, color: Color(0xFF0F172A)),
-              onChanged: (value) {
-                setState(() {
-                  searchTerm = value;
-                });
-              },
-            ),
-          ),
-          Container(
-            constraints: const BoxConstraints(maxHeight: 200),
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: filteredOperators.length,
-              itemBuilder: (context, index) {
-                final operator = filteredOperators[index];
-                return InkWell(
-                  onTap: () {
-                    setState(() {
-                      selectedOperator = operator;
-                      showOperators = false;
-                      searchTerm = '';
-                    });
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: const BoxDecoration(
-                      border: Border(top: BorderSide(color: Color(0xFFE2E8F0))),
-                    ),
-                    child: Text(
-                      '${operator.firstName} ${operator.lastName}',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Color(0xFF0F172A),
+    return Material(
+      color: Colors.transparent,
+      child: GestureDetector(
+        onTap: onClose,
+        child: Container(
+          color: Colors.black.withOpacity(0.5),
+          child: Center(
+            child: GestureDetector(
+              onTap: () {},
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.9,
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.7,
+                ),
+                decoration: BoxDecoration(
+                  color: scaffoldBackgroundColor,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            title,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                              color: textColorPrimary,
+                            ),
+                          ),
+                          IconButton(
+                            icon: Icon(
+                              LucideIcons.x,
+                              color: textColorSecondary,
+                            ),
+                            onPressed: onClose,
+                            tooltip: 'Cerrar',
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                );
-              },
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      child: TextField(
+                        controller: searchController,
+                        onChanged: onSearchChanged,
+                        decoration: InputDecoration(
+                          hintText: 'Buscar...',
+                          prefixIcon: Icon(
+                            LucideIcons.search,
+                            size: 18,
+                            color: textColorSecondary,
+                          ),
+                          suffixIcon:
+                              searchController.text.isNotEmpty
+                                  ? IconButton(
+                                    icon: Icon(
+                                      LucideIcons.circleX,
+                                      size: 16,
+                                      color: textColorSecondary,
+                                    ),
+                                    onPressed: () {
+                                      searchController.clear();
+                                      onSearchChanged('');
+                                    },
+                                  )
+                                  : null,
+                          filled: true,
+                          fillColor: Colors.white,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 10,
+                            horizontal: 12,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide(color: borderColor),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide(color: borderColor),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide(color: primaryColor),
+                          ),
+                        ),
+                      ),
+                    ),
+                    ListTile(
+                      title: Text(
+                        'Quitar Selección',
+                        style: TextStyle(
+                          fontStyle: FontStyle.italic,
+                          color: textColorSecondary,
+                        ),
+                      ),
+                      selected: selectedItem == null,
+                      selectedTileColor: primaryColor.withOpacity(0.05),
+                      onTap: () {
+                        onClear();
+                        onClose();
+                      },
+                    ),
+                    Divider(height: 1, color: borderColor),
+                    Flexible(
+                      child:
+                          filteredItems.isEmpty
+                              ? Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16.0),
+                                  child: Text(
+                                    'No se encontraron coincidencias',
+                                    style: TextStyle(color: textColorSecondary),
+                                  ),
+                                ),
+                              )
+                              : ListView.separated(
+                                shrinkWrap: true,
+                                itemCount: filteredItems.length,
+                                itemBuilder:
+                                    (context, index) =>
+                                        itemBuilder(filteredItems[index]),
+                                separatorBuilder:
+                                    (context, index) => Divider(
+                                      height: 1,
+                                      indent: 16,
+                                      endIndent: 16,
+                                      color: borderColor.withOpacity(0.5),
+                                    ),
+                              ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }
 
   Widget _buildTripsList() {
     if (loading) {
-      return const Center(child: CircularProgressIndicator());
+      return Center(child: CircularProgressIndicator(color: primaryColor));
+    }
+
+    if (initialLoad) {
+      return _buildEmptyState(
+        icon: LucideIcons.searchCode,
+        title: 'Realizar Búsqueda',
+        message:
+            'Seleccione un operador y un rango de fechas para ver los reportes.',
+      );
     }
 
     if (trips.isEmpty) {
-      return Center(
-        child: Text(
-          'No hay viajes en este período',
-          style: TextStyle(fontSize: 16, color: const Color(0xFF64748B)),
-        ),
+      return _buildEmptyState(
+        icon: LucideIcons.fileX2,
+        title: 'Sin Resultados',
+        message: 'No se encontraron viajes para los filtros seleccionados.',
       );
     }
 
@@ -350,146 +531,366 @@ class _OperatorReportsScreenState extends State<OperatorReportsScreen> {
     );
   }
 
+  Widget _buildEmptyState({
+    required IconData icon,
+    required String title,
+    required String message,
+  }) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          child: Container(
+            padding: const EdgeInsets.all(32.0),
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 60, color: Colors.grey.shade400),
+                const SizedBox(height: 16),
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: textColorSecondary,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  message,
+                  style: TextStyle(fontSize: 14, color: Colors.grey.shade500),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildTripCard(Trip trip) {
+    final driverName =
+        trip.driver_profiles != null
+            ? '${trip.driver_profiles!['first_name'] ?? ''} ${trip.driver_profiles!['last_name'] ?? ''}'
+                .trim()
+            : 'No asignado';
+    final operatorName =
+        trip.operator_profiles != null
+            ? '${trip.operator_profiles!['first_name'] ?? ''} ${trip.operator_profiles!['last_name'] ?? ''}'
+                .trim()
+            : 'No asignado';
+
     return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      elevation: 2,
+      elevation: 1.5,
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: cardBackgroundColor,
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Encabezado del viaje
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  DateFormat(
-                    'dd/MM/yyyy',
-                  ).format(DateTime.parse(trip.createdAt)),
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: Color(0xFFDC2626),
-                  ),
-                ),
-                Text(
-                  '\$${trip.price}',
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFFDC2626),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-
-            // Detalles del viaje
-            Row(
-              children: [
-                const Text(
-                  'Origen:',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF64748B)),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    trip.origin,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: Color(0xFF0F172A),
+                Row(
+                  children: [
+                    Icon(LucideIcons.calendar, size: 14, color: primaryColor),
+                    const SizedBox(width: 6),
+                    Text(
+                      _displayDateFormat.format(DateTime.parse(trip.createdAt)),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: textColorSecondary,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
+                  ],
+                ),
+                Text(
+                  currencyFormatter.format(trip.price ?? 0.0),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: primaryColor,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 4),
-            Row(
-              children: [
-                const Text(
-                  'Destino:',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF64748B)),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    trip.destination,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: Color(0xFF0F172A),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
+            Divider(height: 20, color: borderColor.withOpacity(0.7)),
 
-            // Pie del viaje
-            Container(
-              padding: const EdgeInsets.only(top: 8),
-              decoration: const BoxDecoration(
-                border: Border(top: BorderSide(color: Color(0xFFE2E8F0))),
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 60,
-                        child: const Text(
-                          'Chofer:',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Color(0xFF64748B),
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: Text(
-                          trip.driver_profiles != null
-                              ? '${trip.driver_profiles!['first_name']} ${trip.driver_profiles!['last_name']}'
-                              : 'No asignado',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Color(0xFF0F172A),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Container(
-                        width: 60,
-                        child: const Text(
-                          'Operador:',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Color(0xFF64748B),
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: Text(
-                          trip.operator_profiles != null
-                              ? '${trip.operator_profiles!['first_name']} ${trip.operator_profiles!['last_name']}'
-                              : 'No asignado',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Color(0xFF0F172A),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+            _buildDetailRow(
+              icon: LucideIcons.mapPin,
+              label: 'Origen:',
+              value: trip.origin,
+            ),
+            _buildDetailRow(
+              icon: LucideIcons.flag,
+              label: 'Destino:',
+              value: trip.destination,
+            ),
+            _buildDetailRow(
+              icon: LucideIcons.shipWheel,
+              label: 'Chofer:',
+              value: driverName,
+            ),
+            _buildDetailRow(
+              icon: LucideIcons.userCheck,
+              label: 'Operador:',
+              value: operatorName,
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildDetailRow({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 15, color: textColorSecondary),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 65,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                color: textColorSecondary,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value.isNotEmpty ? value : '-',
+              style: TextStyle(fontSize: 13, color: textColorPrimary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _selectDate(BuildContext context, bool isStartDate) async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: isStartDate ? startDate : endDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(Duration(days: 365)),
+      locale: const Locale('es', 'ES'),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: ColorScheme.light(
+              primary: primaryColor,
+              onPrimary: Colors.white,
+              onSurface: textColorPrimary,
+            ),
+            textButtonTheme: TextButtonThemeData(
+              style: TextButton.styleFrom(foregroundColor: primaryColor),
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null) {
+      setState(() {
+        if (isStartDate) {
+          if (picked.isAfter(endDate)) {
+            startDate = picked;
+            endDate = picked;
+          } else {
+            startDate = picked;
+          }
+        } else {
+          if (picked.isBefore(startDate)) {
+            endDate = picked;
+            startDate = picked;
+          } else {
+            endDate = picked;
+          }
+        }
+      });
+    }
+  }
+
+  void _showOperatorSelectionModal() {
+    setState(() {
+      searchController.clear();
+    });
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter modalSetState) {
+            final List<OperatorProfile> filteredModalOperators =
+                operators.where((operator) {
+                  final fullName =
+                      '${operator.first_name} ${operator.last_name}'
+                          .toLowerCase();
+                  final query = searchController.text.toLowerCase();
+                  return fullName.contains(query);
+                }).toList();
+
+            return Container(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.7,
+              ),
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Seleccionar Operador',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: textColorPrimary,
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(LucideIcons.x, color: textColorSecondary),
+                        onPressed: () => Navigator.pop(context),
+                        tooltip: 'Cerrar',
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: searchController,
+                    onChanged: (value) {
+                      modalSetState(() {});
+                    },
+                    decoration: InputDecoration(
+                      hintText: 'Buscar por nombre...',
+                      prefixIcon: Icon(
+                        LucideIcons.search,
+                        size: 20,
+                        color: textColorSecondary,
+                      ),
+                      filled: true,
+                      fillColor: Colors.grey.shade50,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: borderColor),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: borderColor),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: primaryColor),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 10,
+                        horizontal: 12,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ListTile(
+                    leading: Icon(
+                      LucideIcons.users,
+                      color:
+                          selectedOperator == null
+                              ? primaryColor
+                              : textColorSecondary,
+                    ),
+                    title: Text(
+                      'Todos los Operadores',
+                      style: TextStyle(
+                        fontWeight:
+                            selectedOperator == null
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                      ),
+                    ),
+                    onTap: () {
+                      setState(() {
+                        selectedOperator = null;
+                      });
+                      Navigator.pop(context);
+                    },
+                    dense: true,
+                    selected: selectedOperator == null,
+                    selectedTileColor: primaryColor.withOpacity(0.1),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  Divider(color: borderColor.withOpacity(0.5)),
+                  Expanded(
+                    child:
+                        filteredModalOperators.isEmpty
+                            ? Center(
+                              child: Text(
+                                'No se encontraron operadores',
+                                style: TextStyle(color: textColorSecondary),
+                              ),
+                            )
+                            : ListView.builder(
+                              shrinkWrap: true,
+                              itemCount: filteredModalOperators.length,
+                              itemBuilder: (context, index) {
+                                final operator = filteredModalOperators[index];
+                                final bool isCurrentlySelected =
+                                    selectedOperator?.id == operator.id;
+                                return ListTile(
+                                  leading: Icon(
+                                    LucideIcons.user,
+                                    color:
+                                        isCurrentlySelected
+                                            ? primaryColor
+                                            : textColorSecondary,
+                                  ),
+                                  title: Text(
+                                    '${operator.first_name} ${operator.last_name}',
+                                  ),
+                                  onTap: () {
+                                    setState(() {
+                                      selectedOperator = operator;
+                                    });
+                                    Navigator.pop(context);
+                                  },
+                                  dense: true,
+                                  selected: isCurrentlySelected,
+                                  selectedTileColor: primaryColor.withOpacity(
+                                    0.1,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                );
+                              },
+                            ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }

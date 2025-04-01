@@ -14,6 +14,21 @@ class _OperatorsListScreenState extends State<OperatorsListScreen> {
   bool loading = true;
   List<OperatorProfile> operators = [];
 
+  // Define colores para consistencia
+  final Color primaryColor = Colors.red;
+  final Color scaffoldBackgroundColor = Colors.grey.shade100;
+  final Color cardBackgroundColor = Colors.white;
+  final Color textColorPrimary = Colors.black87;
+  final Color textColorSecondary = Colors.grey.shade600;
+  final Color iconColor = Colors.red; // Para iconos principales y AppBar
+  final Color actionIconColor = Colors.grey.shade700; // Iconos de acción
+  final Color deleteIconColor = Colors.red.shade600; // Icono de eliminar
+  final Color borderColor = Colors.grey.shade300;
+  final Color errorColor = Colors.red.shade700;
+  final Color successColor = Colors.green.shade600;
+  final Color activeColor = Colors.green.shade500;
+  final Color inactiveColor = Colors.grey.shade400;
+
   @override
   void initState() {
     super.initState();
@@ -22,40 +37,66 @@ class _OperatorsListScreenState extends State<OperatorsListScreen> {
 
   Future<void> fetchOperators() async {
     try {
-      setState(() {
-        loading = true;
-      });
-
       final operatorService = OperatorService();
       final response = await operatorService.getAllOperators();
 
-      setState(() {
-        operators = response;
-        loading = false;
-      });
+      if (mounted) {
+        setState(() {
+          operators = response;
+          // Ordenar alfabéticamente
+          operators.sort(
+            (a, b) => '${a.firstName} ${a.lastName}'.compareTo(
+              '${b.firstName} ${b.lastName}',
+            ),
+          );
+          loading = false;
+        });
+      }
     } catch (error) {
       developer.log('Error al cargar operadores: $error');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudieron cargar los operadores')),
-      );
-      setState(() {
-        loading = false;
-      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudieron cargar los operadores'),
+            backgroundColor: errorColor,
+          ),
+        );
+        setState(() {
+          loading = false;
+        });
+      }
     }
   }
 
   Future<void> handleToggleActive(String operatorId, bool currentStatus) async {
+    // Mostrar un indicador visual temporal
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          currentStatus ? 'Desactivando operador...' : 'Activando operador...',
+        ),
+        duration: Duration(seconds: 1), // Duración corta
+        backgroundColor: Colors.blueGrey,
+      ),
+    );
+
     try {
       final operatorService = OperatorService();
       await operatorService.updateOperatorStatus(operatorId, !currentStatus);
+      // No es necesario llamar a fetchOperators aquí si la API devuelve el estado actualizado
+      // o si actualizamos localmente el estado para una respuesta más rápida.
+      // Por simplicidad, recargamos:
       fetchOperators();
     } catch (error) {
       developer.log('Error al actualizar estado: $error');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No se pudo actualizar el estado del operador'),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo actualizar el estado del operador'),
+            backgroundColor: errorColor,
+          ),
+        );
+      }
     }
   }
 
@@ -64,31 +105,66 @@ class _OperatorsListScreenState extends State<OperatorsListScreen> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: const Text('Confirmar'),
-          content: const Text('¿Está seguro que desea eliminar este operador?'),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          title: const Text('Confirmar Eliminación'),
+          content: const Text(
+            '¿Está seguro que desea eliminar este operador? Esta acción no se puede deshacer.',
+            style: TextStyle(fontSize: 15),
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancelar'),
+              child: Text(
+                'Cancelar',
+                style: TextStyle(color: textColorSecondary),
+              ),
             ),
             TextButton(
               onPressed: () async {
-                Navigator.of(context).pop();
+                Navigator.of(context).pop(); // Cerrar diálogo
+                // Mostrar indicador
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Row(
+                      children: [
+                        CircularProgressIndicator(
+                          strokeWidth: 3,
+                          color: Colors.white,
+                        ),
+                        SizedBox(width: 15),
+                        Text('Eliminando...'),
+                      ],
+                    ),
+                    backgroundColor: errorColor.withOpacity(0.8),
+                  ),
+                );
                 try {
+                  // Asegúrate que AuthService y deleteUser existan y funcionen
                   final authService = AuthService();
                   await authService.deleteUser(operatorId);
-                  fetchOperators();
+
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Operador eliminado correctamente'),
+                      backgroundColor: successColor,
+                    ),
+                  );
+                  fetchOperators(); // Recargar lista
                 } catch (error) {
                   developer.log('Error al eliminar operador: $error');
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
+                    SnackBar(
                       content: Text('No se pudo eliminar el operador'),
+                      backgroundColor: errorColor,
                     ),
                   );
                 }
               },
-              style: TextButton.styleFrom(foregroundColor: Colors.red),
-              child: const Text('Eliminar'),
+              child: Text('Eliminar', style: TextStyle(color: errorColor)),
             ),
           ],
         );
@@ -99,154 +175,170 @@ class _OperatorsListScreenState extends State<OperatorsListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: scaffoldBackgroundColor, // Aplicar color de fondo
       appBar: AppBar(
-        title: const Text('Lista de Operadores'),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        elevation: 0,
+        title: const Text(
+          'Lista de Operadores',
+          style: TextStyle(fontWeight: FontWeight.w600), // Estilo de título
+        ),
+        backgroundColor: cardBackgroundColor, // Fondo blanco
+        foregroundColor: textColorPrimary, // Texto oscuro
+        elevation: 1.0, // Sombra sutil
+        leading: IconButton(
+          // Botón para volver
+          icon: Icon(Icons.arrow_back, color: iconColor),
+          onPressed: () => Navigator.pop(context),
+        ),
       ),
       body:
           loading
-              ? const Center(child: CircularProgressIndicator())
+              ? Center(
+                child: CircularProgressIndicator(color: primaryColor),
+              ) // Indicador estilizado
               : _buildOperatorsList(),
     );
   }
 
   Widget _buildOperatorsList() {
     if (operators.isEmpty) {
-      return const Center(
-        child: Text(
-          'No hay operadores registrados',
-          style: TextStyle(fontSize: 16, color: Color(0xFF64748B)),
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(LucideIcons.users, size: 50, color: Colors.grey.shade400),
+              const SizedBox(height: 16),
+              Text(
+                'No hay operadores registrados',
+                style: TextStyle(fontSize: 16, color: textColorSecondary),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: operators.length,
-      itemBuilder: (context, index) {
-        final operator = operators[index];
-        return _buildOperatorCard(operator);
-      },
+    // Usar RefreshIndicator para recarga manual
+    return RefreshIndicator(
+      color: primaryColor,
+      onRefresh: fetchOperators,
+      child: ListView.builder(
+        padding: const EdgeInsets.symmetric(
+          vertical: 8.0,
+          horizontal: 12.0,
+        ), // Ajustar padding
+        itemCount: operators.length,
+        itemBuilder: (context, index) {
+          final operator = operators[index];
+          return _buildOperatorCard(operator);
+        },
+      ),
     );
   }
 
   Widget _buildOperatorCard(OperatorProfile operator) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      elevation: 2,
-      child: Container(
-        height: 64,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        child: Row(
-          children: [
-            // Información del operador
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color:
-                              operator.users?['active'] == true
-                                  ? const Color(0xFF22C55E)
-                                  : const Color(0xFF94A3B8),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        '${operator.firstName} ${operator.lastName}',
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF1E293B),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    operator.identityCard,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: Color(0xFF64748B),
-                    ),
-                  ),
-                  Text(
-                    operator.phoneNumber ?? '',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: Color(0xFF64748B),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+    final bool isActive = operator.users?['active'] == true;
+    final String phone = operator.phoneNumber ?? 'N/A';
+    final String dni = operator.identityCard;
 
-            // Acciones
-            Row(
-              children: [
-                _buildActionButton(
-                  icon: LucideIcons.pencil,
-                  color: const Color(0xFF64748B),
-                  onTap: () {
-                    Navigator.pushNamed(
-                      context,
-                      '/editOperatorScreen',
-                      arguments: operator,
-                    );
-                  },
-                ),
-                const SizedBox(width: 4),
-                _buildActionButton(
-                  icon:
-                      operator.users?['active'] == true
-                          ? LucideIcons.powerOff
-                          : LucideIcons.power,
-                  color: const Color(0xFF64748B),
-                  onTap:
-                      () => handleToggleActive(
-                        operator.id,
-                        operator.users?['active'] == true,
-                      ),
-                ),
-                const SizedBox(width: 4),
-                _buildActionButton(
-                  icon: LucideIcons.trash,
-                  color: const Color(0xFFEF4444),
-                  onTap: () => handleDelete(operator.id),
-                ),
-              ],
+    return Card(
+      elevation: 1.5,
+      margin: const EdgeInsets.only(bottom: 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: cardBackgroundColor,
+      child: ListTile(
+        contentPadding: EdgeInsets.symmetric(
+          horizontal: 16.0,
+          vertical: 8.0,
+        ), // Padding interno
+        leading: Tooltip(
+          // Añadir tooltip al indicador de estado
+          message: isActive ? 'Activo' : 'Inactivo',
+          child: Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(
+              color: isActive ? activeColor : inactiveColor,
+              shape: BoxShape.circle,
+            ),
+          ),
+        ),
+        title: Text(
+          '${operator.firstName} ${operator.lastName}',
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            color: textColorPrimary,
+          ),
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 4.0),
+          child: Text(
+            'DNI: $dni • Tel: $phone', // Mostrar DNI y teléfono
+            style: TextStyle(fontSize: 13, color: textColorSecondary),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        trailing: Row(
+          // Agrupar botones en un Row
+          mainAxisSize: MainAxisSize.min, // Para que ocupe el mínimo espacio
+          children: [
+            _buildActionButton(
+              icon: LucideIcons.pencil,
+              tooltip: 'Editar',
+              color: actionIconColor,
+              onTap: () {
+                Navigator.pushNamed(
+                  context,
+                  '/editOperatorScreen', // Asegúrate que esta ruta exista
+                  arguments: operator,
+                ).then((_) => fetchOperators()); // Recargar al volver
+              },
+            ),
+            _buildActionButton(
+              icon: isActive ? LucideIcons.powerOff : LucideIcons.power,
+              tooltip: isActive ? 'Desactivar' : 'Activar',
+              color: actionIconColor,
+              onTap: () => handleToggleActive(operator.id, isActive),
+            ),
+            _buildActionButton(
+              icon: LucideIcons.trash2, // Icono actualizado
+              tooltip: 'Eliminar',
+              color: deleteIconColor, // Color rojo para eliminar
+              onTap: () => handleDelete(operator.id),
             ),
           ],
         ),
+        onTap: () {
+          // Acción opcional al tocar la tarjeta (ej. ver detalles)
+          Navigator.pushNamed(
+            context,
+            '/editOperatorScreen',
+            arguments: operator,
+          ).then((_) => fetchOperators());
+        },
       ),
     );
   }
 
+  // Widget para botones de acción usando IconButton
   Widget _buildActionButton({
     required IconData icon,
+    required String tooltip,
     required Color color,
     required VoidCallback onTap,
   }) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(6),
-        decoration: BoxDecoration(
-          color: const Color(0xFFFEF2F2),
-          border: Border.all(color: const Color(0xFFFECACA)),
-        ),
-        child: Icon(icon, size: 20, color: color),
-      ),
+    return IconButton(
+      icon: Icon(icon, size: 20), // Tamaño ajustado
+      color: color,
+      tooltip: tooltip,
+      onPressed: onTap,
+      padding: EdgeInsets.all(8), // Padding alrededor del icono
+      constraints: BoxConstraints(), // Para evitar padding extra por defecto
+      splashRadius: 20, // Radio del efecto splash
     );
   }
 }

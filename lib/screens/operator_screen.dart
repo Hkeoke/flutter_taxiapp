@@ -8,6 +8,8 @@ import '../services/api.dart';
 import '../widgets/sidebar.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:http/http.dart' as http;
 
 class OperatorScreen extends StatefulWidget {
   const OperatorScreen({Key? key}) : super(key: key);
@@ -29,20 +31,7 @@ class _OperatorScreenState extends State<OperatorScreen> {
   Map<String, dynamic>? selectedDriver;
 
   // Coordenadas para el mapa
-  Map<String, dynamic>? originCoords;
-  Map<String, dynamic>? destinationCoords;
   Map<String, dynamic>? selectedLocation;
-
-  // Formulario de solicitud
-  Map<String, dynamic> requestForm = {
-    'origin': '',
-    'destination': '',
-    'price': '',
-    'observations': '',
-    'vehicle_type': '4_ruedas',
-    'passenger_phone': '',
-    'stops': <Map<String, dynamic>>[],
-  };
 
   // Radio de búsqueda
   double searchRadius = 3000;
@@ -67,12 +56,57 @@ class _OperatorScreenState extends State<OperatorScreen> {
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
+  // --- Estado del Mapa ---
+  GoogleMapController? mapController;
+  final LatLng _center = const LatLng(
+    19.4326,
+    -99.1332,
+  ); // Centro inicial (CDMX)
+  Set<Marker> _markers = {};
+
+  // --- Estado del Formulario ---
+  Map<String, dynamic> requestForm = {
+    'origin': '',
+    'destination': '',
+    'stops': [], // Lista de paradas (Map<String, dynamic>)
+    'vehicle_type': '4_ruedas', // '4_ruedas' o '2_ruedas'
+    'price': '',
+  };
+  Map<String, dynamic>? originCoords;
+  Map<String, dynamic>? destinationCoords;
+  // Lista de coordenadas de paradas, debe coincidir con requestForm['stops']
+  List<Map<String, dynamic>> stopCoords = [];
+
+  bool isSubmitting = false;
+
+  // Definir colores consistentes como en AdminScreen
+  final Color primaryColor = Colors.red;
+  final Color scaffoldBackgroundColor = Colors.grey.shade100;
+  final Color cardBackgroundColor = Colors.white;
+  final Color textColorPrimary = Colors.black87;
+  final Color textColorSecondary = Colors.grey.shade600;
+  final Color iconColor = Colors.red;
+  final Color inputFillColor = Colors.grey.shade50;
+  final Color inputBorderColor = Colors.grey.shade200;
+  final Color errorColor = Colors.red.shade700;
+  final Color successColor = Colors.green.shade600;
+  final Color infoColor = Colors.blue.shade600;
+
+  // --- GlobalKey para el Formulario ---
+  final _formKey = GlobalKey<FormState>();
+
   @override
   void initState() {
     super.initState();
     fetchDrivers();
     _initializeNotifications();
     _setupTripSubscription();
+    // Retrasar la suscripción hasta después del primer frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _setupTripSubscription();
+      }
+    });
   }
 
   Future<void> fetchDrivers() async {
@@ -410,11 +444,19 @@ class _OperatorScreenState extends State<OperatorScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('Solicitar Viaje'),
+        backgroundColor: cardBackgroundColor,
+        foregroundColor: textColorPrimary,
+        elevation: 1.0,
+        title: const Text(
+          'Solicitar Viaje',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
         leading: IconButton(
-          icon: const Icon(Icons.menu),
+          icon: Icon(Icons.menu, color: iconColor),
           onPressed: () => setState(() => isSidebarVisible = true),
+          tooltip: 'Menú',
         ),
       ),
       body: Stack(
@@ -433,18 +475,19 @@ class _OperatorScreenState extends State<OperatorScreen> {
             mapToolbarEnabled: false,
           ),
 
-          // Botón flotante para mostrar formulario
+          // Actualizar el botón flotante
           Positioned(
             bottom: 16,
             right: 16,
             child: FloatingActionButton(
               onPressed: () => setState(() => showRequestForm = true),
-              backgroundColor: Colors.red,
-              child: const Icon(Icons.add),
+              backgroundColor: primaryColor,
+              elevation: 4,
+              child: const Icon(Icons.add, size: 28),
             ),
           ),
 
-          // Formulario de solicitud
+          // Actualizar el formulario de solicitud
           if (showRequestForm)
             Container(
               color: Colors.black.withOpacity(0.5),
@@ -461,33 +504,41 @@ class _OperatorScreenState extends State<OperatorScreen> {
               maxChildSize: 0.95,
               builder: (context, scrollController) {
                 return Container(
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.only(
+                  decoration: BoxDecoration(
+                    color: cardBackgroundColor,
+                    borderRadius: const BorderRadius.only(
                       topLeft: Radius.circular(20),
                       topRight: Radius.circular(20),
                     ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 10,
+                        offset: const Offset(0, -5),
+                      ),
+                    ],
                   ),
                   child: SingleChildScrollView(
                     controller: scrollController,
                     child: Padding(
-                      padding: const EdgeInsets.all(16.0),
+                      padding: const EdgeInsets.all(20.0),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Cabecera del formulario
+                          // Cabecera mejorada
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              const Text(
+                              Text(
                                 'Solicitar Viaje',
                                 style: TextStyle(
-                                  fontSize: 20,
+                                  fontSize: 24,
                                   fontWeight: FontWeight.bold,
+                                  color: textColorPrimary,
                                 ),
                               ),
                               IconButton(
-                                icon: const Icon(Icons.close),
+                                icon: Icon(Icons.close, color: iconColor),
                                 onPressed:
                                     () =>
                                         setState(() => showRequestForm = false),
@@ -495,68 +546,31 @@ class _OperatorScreenState extends State<OperatorScreen> {
                             ],
                           ),
 
-                          const SizedBox(height: 16),
+                          const SizedBox(height: 24),
 
-                          // Origen
-                          GestureDetector(
+                          // Campos de ubicación mejorados
+                          _buildLocationField(
+                            label: 'Origen',
+                            value: requestForm['origin'],
                             onTap: () {
                               setState(() {
                                 searchMode = 'origin';
                                 showLocationModal = true;
                               });
                             },
-                            child: Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: Colors.grey[100],
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.grey[300]!),
-                              ),
-                              child: Text(
-                                requestForm['origin'] != ''
-                                    ? requestForm['origin']
-                                    : 'Seleccionar origen',
-                                style: TextStyle(
-                                  color:
-                                      requestForm['origin'] != ''
-                                          ? Colors.black87
-                                          : Colors.grey[600],
-                                ),
-                              ),
-                            ),
                           ),
 
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 16),
 
-                          // Destino
-                          GestureDetector(
+                          _buildLocationField(
+                            label: 'Destino',
+                            value: requestForm['destination'],
                             onTap: () {
                               setState(() {
                                 searchMode = 'destination';
                                 showLocationModal = true;
                               });
                             },
-                            child: Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: Colors.grey[100],
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: Colors.grey[300]!),
-                              ),
-                              child: Text(
-                                requestForm['destination'] != ''
-                                    ? requestForm['destination']
-                                    : 'Seleccionar destino',
-                                style: TextStyle(
-                                  color:
-                                      requestForm['destination'] != ''
-                                          ? Colors.black87
-                                          : Colors.grey[600],
-                                ),
-                              ),
-                            ),
                           ),
 
                           const SizedBox(height: 16),
@@ -881,6 +895,65 @@ class _OperatorScreenState extends State<OperatorScreen> {
             ),
         ],
       ),
+    );
+  }
+
+  // Nuevo widget para campos de ubicación
+  Widget _buildLocationField({
+    required String label,
+    required String value,
+    required VoidCallback onTap,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w500,
+            color: textColorPrimary,
+          ),
+        ),
+        const SizedBox(height: 8),
+        GestureDetector(
+          onTap: onTap,
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: inputFillColor,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: inputBorderColor),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.location_on,
+                  color: value.isEmpty ? textColorSecondary : primaryColor,
+                  size: 20,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    value.isEmpty ? 'Seleccionar $label' : value,
+                    style: TextStyle(
+                      color:
+                          value.isEmpty ? textColorSecondary : textColorPrimary,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+                Icon(
+                  Icons.arrow_forward_ios,
+                  color: textColorSecondary,
+                  size: 16,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 

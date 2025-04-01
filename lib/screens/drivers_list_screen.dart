@@ -4,6 +4,7 @@ import 'dart:developer' as developer;
 import '../services/api.dart';
 import '../widgets/sidebar.dart';
 import '../screens/driver_trips_analytics_screen.dart';
+import 'package:intl/intl.dart';
 
 class DriversListScreen extends StatefulWidget {
   const DriversListScreen({Key? key}) : super(key: key);
@@ -20,13 +21,42 @@ class _DriversListScreenState extends State<DriversListScreen> {
   String searchQuery = '';
   final TextEditingController searchController = TextEditingController();
 
+  final Color primaryColor = Colors.red;
+  final Color scaffoldBackgroundColor = Colors.grey.shade100;
+  final Color cardBackgroundColor = Colors.white;
+  final Color textColorPrimary = Colors.black87;
+  final Color textColorSecondary = Colors.grey.shade600;
+  final Color iconColor = Colors.red;
+  final Color borderColor = Colors.grey.shade300;
+  final Color errorColor = Colors.red.shade700;
+  final Color successColor = Colors.green.shade600;
+  final Color inactiveColor = Colors.grey.shade500;
+  final Color searchBackgroundColor = Colors.grey.shade200;
+
   @override
   void initState() {
     super.initState();
     _fetchDrivers();
   }
 
-  Future<void> _fetchDrivers() async {
+  @override
+  void dispose() {
+    searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _fetchDrivers({bool isRefresh = false}) async {
+    if (!isRefresh && !mounted) return;
+    if (!isRefresh) {
+      setState(() {
+        loading = true;
+      });
+    } else {
+      setState(() {
+        refreshing = true;
+      });
+    }
+
     try {
       final driverService = DriverService();
       final response = await driverService.getAllDrivers();
@@ -34,6 +64,11 @@ class _DriversListScreenState extends State<DriversListScreen> {
       if (mounted) {
         setState(() {
           drivers = response;
+          drivers.sort(
+            (a, b) => '${a.firstName} ${a.lastName}'.toLowerCase().compareTo(
+              '${b.firstName} ${b.lastName}'.toLowerCase(),
+            ),
+          );
           loading = false;
           refreshing = false;
         });
@@ -42,7 +77,10 @@ class _DriversListScreenState extends State<DriversListScreen> {
       developer.log('Error cargando conductores: $error');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudieron cargar los choferes')),
+          SnackBar(
+            content: Text('No se pudieron cargar los choferes'),
+            backgroundColor: errorColor,
+          ),
         );
         setState(() {
           loading = false;
@@ -52,84 +90,145 @@ class _DriversListScreenState extends State<DriversListScreen> {
     }
   }
 
-  Future<void> _handleToggleActive(String driverId, bool currentStatus) async {
-    try {
-      final driverService = DriverService();
-      await driverService.deactivateUser(driverId, !currentStatus);
+  Future<void> _handleToggleActive(DriverProfile driver) async {
+    final bool currentStatus = driver.users?['active'] ?? false;
+    final String actionText = currentStatus ? 'desactivar' : 'activar';
+    final String driverName = '${driver.firstName} ${driver.lastName}';
 
-      await _fetchDrivers();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Chofer ${currentStatus ? 'desactivado' : 'activado'} correctamente',
-          ),
-        ),
-      );
-    } catch (error) {
-      developer.log('Error al cambiar estado del chofer: $error');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No se pudo actualizar el estado del chofer'),
-        ),
-      );
-    }
-  }
-
-  Future<void> _handleDelete(String driverId) async {
-    showDialog(
+    bool? confirm = await showDialog<bool>(
       context: context,
       builder:
           (context) => AlertDialog(
-            title: const Text('Confirmar'),
-            content: const Text(
-              '¿Estás seguro de que quieres eliminar este chofer?',
+            title: Text('Confirmar ${actionText.capitalize()}'),
+            content: Text(
+              '¿Estás seguro de que quieres $actionText a $driverName?',
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.pop(context, false),
                 child: const Text('Cancelar'),
               ),
               TextButton(
-                onPressed: () async {
-                  Navigator.pop(context);
-                  try {
-                    final authService = AuthService();
-                    await authService.deleteUser(driverId);
-                    await _fetchDrivers();
+                onPressed: () => Navigator.pop(context, true),
+                style: TextButton.styleFrom(
+                  foregroundColor: currentStatus ? errorColor : successColor,
+                ),
+                child: Text(actionText.capitalize()),
+              ),
+            ],
+          ),
+    );
 
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Chofer eliminado correctamente'),
-                      ),
-                    );
-                  } catch (error) {
-                    developer.log('Error al eliminar chofer: $error');
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('No se pudo eliminar el chofer'),
-                      ),
-                    );
-                  }
-                },
-                style: TextButton.styleFrom(foregroundColor: Colors.red),
+    if (confirm != true) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${actionText.capitalize().substring(0, actionText.length - 1)}ando chofer...',
+        ),
+        duration: Duration(seconds: 1),
+      ),
+    );
+
+    try {
+      final driverService = DriverService();
+      await driverService.deactivateUser(driver.id, !currentStatus);
+
+      await _fetchDrivers(isRefresh: true);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Chofer ${currentStatus ? 'desactivado' : 'activado'} correctamente',
+            ),
+            backgroundColor: successColor,
+          ),
+        );
+      }
+    } catch (error) {
+      developer.log('Error al cambiar estado del chofer: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo actualizar el estado del chofer'),
+            backgroundColor: errorColor,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleDelete(DriverProfile driver) async {
+    final String driverName = '${driver.firstName} ${driver.lastName}';
+
+    bool? confirm = await showDialog<bool>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Confirmar Eliminación'),
+            content: Text(
+              '¿Estás seguro de que quieres eliminar a $driverName?\nEsta acción no se puede deshacer.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancelar'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                style: TextButton.styleFrom(foregroundColor: errorColor),
                 child: const Text('Eliminar'),
               ),
             ],
           ),
     );
+
+    if (confirm != true) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Eliminando chofer...'),
+        duration: Duration(seconds: 1),
+      ),
+    );
+
+    try {
+      final authService = AuthService();
+      await authService.deleteUser(driver.id);
+
+      await _fetchDrivers(isRefresh: true);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Chofer eliminado correctamente'),
+            backgroundColor: successColor,
+          ),
+        );
+      }
+    } catch (error) {
+      developer.log('Error al eliminar chofer: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo eliminar el chofer'),
+            backgroundColor: errorColor,
+          ),
+        );
+      }
+    }
   }
 
   List<DriverProfile> get filteredDrivers {
     if (searchQuery.isEmpty) {
       return drivers;
     }
-
-    final query = searchQuery.toLowerCase();
+    final query = searchQuery.toLowerCase().trim();
     return drivers.where((driver) {
       final fullName = "${driver.firstName} ${driver.lastName}".toLowerCase();
       final phone = driver.phoneNumber.toLowerCase();
-      final vehicle = driver.vehicle.toLowerCase();
+      final vehicle = driver.vehicle?.toLowerCase() ?? '';
 
       return fullName.contains(query) ||
           phone.contains(query) ||
@@ -139,313 +238,246 @@ class _DriversListScreenState extends State<DriversListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (loading) {
-      return Scaffold(
-        appBar: AppBar(
-          title: const Text('Lista de Choferes'),
-          leading: IconButton(
-            icon: const Icon(Icons.menu),
-            onPressed: () => setState(() => isSidebarVisible = true),
-          ),
-        ),
-        body: const Center(child: CircularProgressIndicator(color: Colors.red)),
-      );
-    }
+    final displayedDrivers = filteredDrivers;
 
     return Scaffold(
+      backgroundColor: scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('Lista de Choferes'),
+        title: const Text(
+          'Lista de Choferes',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        backgroundColor: cardBackgroundColor,
+        foregroundColor: textColorPrimary,
+        elevation: 1.0,
         leading: IconButton(
-          icon: const Icon(Icons.menu),
+          icon: Icon(Icons.menu, color: iconColor),
           onPressed: () => setState(() => isSidebarVisible = true),
         ),
+        actions: [
+          IconButton(
+            icon: Icon(LucideIcons.userPlus, color: primaryColor),
+            tooltip: 'Crear Nuevo Chofer',
+            onPressed:
+                () => Navigator.pushNamed(
+                  context,
+                  '/createDriverScreen',
+                ).then((_) => _fetchDrivers()),
+          ),
+        ],
       ),
       body: Stack(
         children: [
           Column(
             children: [
-              // Barra de búsqueda
-              Container(
-                padding: const EdgeInsets.all(16),
-                color: Colors.white,
-                child: TextField(
-                  controller: searchController,
-                  onChanged: (value) => setState(() => searchQuery = value),
-                  decoration: InputDecoration(
-                    hintText: 'Buscar por nombre, teléfono o vehículo...',
-                    hintStyle: const TextStyle(color: Color(0xFF94A3B8)),
-                    filled: true,
-                    fillColor: const Color(0xFFF1F5F9),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide.none,
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                  ),
-                  style: const TextStyle(
-                    fontSize: 14,
-                    color: Color(0xFF1E293B),
-                  ),
-                ),
-              ),
-
-              // Lista de conductores
+              _buildSearchBar(),
               Expanded(
-                child: RefreshIndicator(
-                  onRefresh: () async {
-                    setState(() => refreshing = true);
-                    await _fetchDrivers();
-                  },
-                  color: Colors.red,
-                  child:
-                      filteredDrivers.isEmpty
-                          ? Center(
-                            child: Text(
-                              searchQuery.isNotEmpty
-                                  ? 'No se encontraron choferes con esa búsqueda'
-                                  : 'No hay choferes registrados',
-                              style: const TextStyle(
-                                color: Color(0xFF64748B),
-                                fontSize: 16,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                          )
-                          : ListView.builder(
-                            padding: const EdgeInsets.all(16),
-                            itemCount: filteredDrivers.length,
-                            itemBuilder: (context, index) {
-                              final driver = filteredDrivers[index];
-                              return _buildDriverCard(driver);
-                            },
-                          ),
-                ),
+                child:
+                    loading
+                        ? Center(
+                          child: CircularProgressIndicator(color: primaryColor),
+                        )
+                        : RefreshIndicator(
+                          color: primaryColor,
+                          onRefresh: () => _fetchDrivers(isRefresh: true),
+                          child:
+                              displayedDrivers.isEmpty
+                                  ? _buildEmptyState(searchQuery.isNotEmpty)
+                                  : ListView.builder(
+                                    padding: const EdgeInsets.all(12.0),
+                                    itemCount: displayedDrivers.length,
+                                    itemBuilder: (context, index) {
+                                      return _buildDriverCard(
+                                        displayedDrivers[index],
+                                      );
+                                    },
+                                  ),
+                        ),
               ),
             ],
           ),
-
-          // Sidebar
           if (isSidebarVisible)
-            Sidebar(
-              isVisible: isSidebarVisible,
-              onClose: () => setState(() => isSidebarVisible = false),
-              role: 'admin',
+            GestureDetector(
+              onTap: () => setState(() => isSidebarVisible = false),
+              child: Container(color: Colors.black54),
+            ),
+          if (isSidebarVisible)
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              child: Sidebar(
+                isVisible: isSidebarVisible,
+                role: 'admin',
+                onClose: () => setState(() => isSidebarVisible = false),
+              ),
             ),
         ],
       ),
     );
   }
 
-  Widget _buildDriverCard(DriverProfile driver) {
+  Widget _buildSearchBar() {
     return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(6),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 1,
-            offset: const Offset(0, 1),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      color: cardBackgroundColor,
+      child: TextField(
+        controller: searchController,
+        onChanged: (value) => setState(() => searchQuery = value),
+        style: TextStyle(color: textColorPrimary, fontSize: 15),
+        decoration: InputDecoration(
+          hintText: 'Buscar por nombre, teléfono o vehículo...',
+          hintStyle: TextStyle(
+            color: textColorSecondary.withOpacity(0.8),
+            fontSize: 15,
           ),
-        ],
+          filled: true,
+          fillColor: searchBackgroundColor,
+          prefixIcon: Icon(
+            LucideIcons.search,
+            size: 20,
+            color: textColorSecondary,
+          ),
+          suffixIcon:
+              searchQuery.isNotEmpty
+                  ? IconButton(
+                    icon: Icon(
+                      LucideIcons.x,
+                      size: 18,
+                      color: textColorSecondary,
+                    ),
+                    onPressed: () {
+                      searchController.clear();
+                      setState(() => searchQuery = '');
+                    },
+                  )
+                  : null,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide.none,
+          ),
+          contentPadding: const EdgeInsets.symmetric(
+            vertical: 0,
+            horizontal: 12,
+          ),
+        ),
       ),
+    );
+  }
+
+  Widget _buildDriverCard(DriverProfile driver) {
+    final bool isActive = driver.users?['active'] ?? false;
+    final String driverName = '${driver.firstName} ${driver.lastName}';
+
+    return Card(
+      elevation: 1.5,
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: cardBackgroundColor,
       child: Padding(
-        padding: const EdgeInsets.all(8),
+        padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Encabezado del conductor
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 28,
-                  height: 28,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFFEF2F2),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Center(
-                    child: Icon(
-                      LucideIcons.user,
-                      size: 16,
-                      color: Color(0xFFDC2626),
+                Expanded(
+                  child: Text(
+                    driverName,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: textColorPrimary,
                     ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        "${driver.firstName} ${driver.lastName}",
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF1E293B),
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF1F5F9),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                color:
-                                    (driver.users != null &&
-                                            driver.users['active'] == true)
-                                        ? const Color(0xFF22C55E)
-                                        : const Color(0xFFEF4444),
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              (driver.users != null &&
-                                      driver.users['active'] == true)
-                                  ? 'Activo'
-                                  : 'Inactivo',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                                color:
-                                    (driver.users != null &&
-                                            driver.users['active'] == true)
-                                        ? const Color(0xFF22C55E)
-                                        : const Color(0xFFEF4444),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                const SizedBox(width: 10),
+                Chip(
+                  avatar: Icon(
+                    isActive
+                        ? LucideIcons.circleCheck
+                        : LucideIcons.circleSlash,
+                    size: 14,
+                    color: isActive ? successColor : inactiveColor,
                   ),
+                  label: Text(isActive ? 'Activo' : 'Inactivo'),
+                  labelStyle: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: isActive ? successColor : inactiveColor,
+                  ),
+                  backgroundColor:
+                      isActive
+                          ? successColor.withOpacity(0.1)
+                          : inactiveColor.withOpacity(0.1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 0,
+                  ),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                  side: BorderSide.none,
                 ),
               ],
             ),
+            const SizedBox(height: 10),
+            Divider(color: borderColor.withOpacity(0.5)),
+            const SizedBox(height: 10),
 
-            // Detalles del conductor
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 4),
-              padding: const EdgeInsets.only(top: 4),
-              decoration: const BoxDecoration(
-                border: Border(top: BorderSide(color: Color(0xFFE2E8F0))),
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      const Icon(
-                        LucideIcons.phone,
-                        size: 16,
-                        color: Color(0xFF64748B),
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        driver.phoneNumber,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF64748B),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Row(
-                    children: [
-                      const Icon(
-                        LucideIcons.car,
-                        size: 16,
-                        color: Color(0xFF64748B),
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        driver.vehicle,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF64748B),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+            _buildDetailRow(icon: LucideIcons.phone, value: driver.phoneNumber),
+            const SizedBox(height: 6),
+            _buildDetailRow(
+              icon: LucideIcons.car,
+              value: driver.vehicle ?? 'N/A',
             ),
+            const SizedBox(height: 12),
 
-            // Acciones
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                // Botón de editar
                 _buildActionButton(
                   icon: LucideIcons.pencil,
-                  color: const Color(0xFF0891B2),
-                  backgroundColor: const Color(0xFFFEF2F2),
+                  tooltip: 'Editar',
+                  color: Colors.blue.shade700,
                   onPressed: () {
                     Navigator.pushNamed(
                       context,
                       '/editDriverScreen',
                       arguments: driver,
-                    );
+                    ).then((_) => _fetchDrivers());
                   },
                 ),
-
-                // Botón de activar/desactivar
+                const SizedBox(width: 8),
                 _buildActionButton(
-                  icon:
-                      (driver.users != null && driver.users['active'] == true)
-                          ? LucideIcons.powerOff
-                          : LucideIcons.power,
-                  color:
-                      (driver.users != null && driver.users['active'] == true)
-                          ? const Color(0xFFEF4444)
-                          : const Color(0xFF22C55E),
-                  backgroundColor:
-                      (driver.users != null && driver.users['active'] == true)
-                          ? const Color(0xFFFEE2E2)
-                          : const Color(0xFFDCFCE7),
-                  onPressed:
-                      () => _handleToggleActive(
-                        driver.id,
-                        (driver.users != null &&
-                            driver.users['active'] == true),
-                      ),
+                  icon: isActive ? LucideIcons.powerOff : LucideIcons.power,
+                  tooltip: isActive ? 'Desactivar' : 'Activar',
+                  color: isActive ? errorColor : successColor,
+                  onPressed: () => _handleToggleActive(driver),
                 ),
-
-                // Botón de eliminar
+                const SizedBox(width: 8),
                 _buildActionButton(
-                  icon: LucideIcons.trash,
-                  color: const Color(0xFFEF4444),
-                  backgroundColor: const Color(0xFFFEE2E2),
-                  onPressed: () => _handleDelete(driver.id),
+                  icon: LucideIcons.trash2,
+                  tooltip: 'Eliminar',
+                  color: errorColor,
+                  onPressed: () => _handleDelete(driver),
                 ),
-
-                // Botón de estadísticas
+                const SizedBox(width: 8),
                 _buildActionButton(
-                  icon: LucideIcons.trendingUp,
-                  color: const Color(0xFF0891B2),
-                  backgroundColor: const Color(0xFFF0FDF4),
+                  icon: LucideIcons.chartBar,
+                  tooltip: 'Ver Estadísticas',
+                  color: Colors.teal.shade600,
                   onPressed: () {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder:
-                            (context) =>
-                                DriverTripsAnalyticsScreen(driverId: driver.id),
+                            (context) => DriverTripsAnalyticsScreen(
+                              driverId: driver.id,
+                              driverName: driverName,
+                            ),
                       ),
                     );
                   },
@@ -458,33 +490,99 @@ class _DriversListScreenState extends State<DriversListScreen> {
     );
   }
 
+  Widget _buildDetailRow({required IconData icon, required String value}) {
+    return Row(
+      children: [
+        Icon(icon, size: 15, color: textColorSecondary),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(fontSize: 13, color: textColorSecondary),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildActionButton({
     required IconData icon,
+    required String tooltip,
     required Color color,
-    required Color backgroundColor,
     required VoidCallback onPressed,
   }) {
-    return Container(
-      width: 36,
-      height: 36,
-      margin: const EdgeInsets.only(top: 4),
-      decoration: BoxDecoration(
-        color: backgroundColor,
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 1,
-            offset: const Offset(0, 1),
-          ),
-        ],
-      ),
-      child: IconButton(
-        icon: Icon(icon, size: 20, color: color),
-        onPressed: onPressed,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(),
+    return IconButton(
+      icon: Icon(icon, size: 20, color: color),
+      onPressed: onPressed,
+      tooltip: tooltip,
+      padding: const EdgeInsets.all(8),
+      constraints: const BoxConstraints(),
+      splashRadius: 20,
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  Widget _buildEmptyState(bool isSearchResult) {
+    final message =
+        isSearchResult
+            ? 'No se encontraron conductores que coincidan con tu búsqueda.'
+            : 'Aún no hay conductores registrados.';
+    final icon = isSearchResult ? LucideIcons.searchX : LucideIcons.users;
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 60, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text(
+              isSearchResult ? 'Sin Resultados' : 'Lista Vacía',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: textColorSecondary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              style: TextStyle(fontSize: 14, color: Colors.grey.shade500),
+              textAlign: TextAlign.center,
+            ),
+            if (!isSearchResult) ...[
+              const SizedBox(height: 24),
+              ElevatedButton.icon(
+                icon: Icon(LucideIcons.userPlus, size: 18),
+                label: Text('Crear Chofer'),
+                onPressed:
+                    () => Navigator.pushNamed(
+                      context,
+                      '/createDriverScreen',
+                    ).then((_) => _fetchDrivers()),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primaryColor,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 12,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
+  }
+}
+
+extension StringExtension on String {
+  String capitalize() {
+    if (this.isEmpty) return "";
+    return "${this[0].toUpperCase()}${this.substring(1)}";
   }
 }

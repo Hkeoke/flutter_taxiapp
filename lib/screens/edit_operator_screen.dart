@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Para InputFormatters
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'dart:developer' as developer;
 import '../services/api.dart';
@@ -21,6 +22,18 @@ class _EditOperatorScreenState extends State<EditOperatorScreen> {
   late TextEditingController lastNameController;
   late TextEditingController phoneNumberController;
   late TextEditingController pinController;
+
+  // Define colores para consistencia (iguales a EditDriverScreen)
+  final Color primaryColor = Colors.red;
+  final Color scaffoldBackgroundColor = Colors.grey.shade100;
+  final Color cardBackgroundColor = Colors.white;
+  final Color textColorPrimary = Colors.black87;
+  final Color textColorSecondary = Colors.grey.shade600;
+  final Color iconColor = Colors.red;
+  final Color inputIconColor = Colors.grey.shade500;
+  final Color borderColor = Colors.grey.shade300;
+  final Color errorColor = Colors.red.shade700;
+  final Color successColor = Colors.green.shade600;
 
   @override
   void initState() {
@@ -108,7 +121,20 @@ class _EditOperatorScreenState extends State<EditOperatorScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Editar Operador')),
+      backgroundColor: scaffoldBackgroundColor,
+      appBar: AppBar(
+        title: Text(
+          'Editar Operador (${widget.operator?.first_name})',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        backgroundColor: cardBackgroundColor,
+        foregroundColor: textColorPrimary,
+        elevation: 1.0,
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back, color: iconColor),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
       body: SafeArea(
         child: Form(
           key: _formKey,

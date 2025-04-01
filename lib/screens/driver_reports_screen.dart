@@ -23,6 +23,27 @@ class _DriverReportsScreenState extends State<DriverReportsScreen> {
   DriverProfile? selectedDriver;
   String searchTerm = '';
 
+  // Define colores para consistencia
+  final Color primaryColor = Colors.red;
+  final Color scaffoldBackgroundColor = Colors.grey.shade100;
+  final Color cardBackgroundColor = Colors.white;
+  final Color textColorPrimary = Colors.black87;
+  final Color textColorSecondary = Colors.grey.shade600;
+  final Color iconColor = Colors.red;
+  final Color inputBackgroundColor =
+      Colors.grey.shade50; // Fondo sutil para inputs/botones de filtro
+  final Color borderColor = Colors.grey.shade300;
+  final Color errorColor = Colors.red.shade700;
+  final Color buttonTextColor = Colors.white;
+
+  // Formateadores
+  final DateFormat _displayDateFormat = DateFormat('dd MMM, yyyy', 'es');
+  final DateFormat _apiDateFormat = DateFormat('yyyy-MM-dd');
+  final currencyFormatter = NumberFormat.currency(
+    locale: 'es_MX',
+    symbol: '\$',
+  );
+
   @override
   void initState() {
     super.initState();
@@ -37,45 +58,80 @@ class _DriverReportsScreenState extends State<DriverReportsScreen> {
       if (mounted) {
         setState(() {
           drivers = driversData;
+          // Ordenar alfabéticamente
+          drivers.sort(
+            (a, b) => '${a.firstName} ${a.lastName}'.compareTo(
+              '${b.firstName} ${b.lastName}',
+            ),
+          );
         });
       }
     } catch (error) {
       developer.log('Error cargando conductores: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudieron cargar los conductores'),
+            backgroundColor: errorColor,
+          ),
+        );
+      }
     }
   }
 
   Future<void> _fetchTrips() async {
-    if (startDate == null || endDate == null) {
+    if (startDate.isAfter(endDate)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Por favor ingrese ambas fechas')),
+        SnackBar(
+          content: Text(
+            'La fecha de inicio no puede ser posterior a la fecha de fin',
+          ),
+          backgroundColor: Colors.orange.shade800,
+        ),
       );
       return;
     }
 
     setState(() {
       loading = true;
-    });
+      trips = [];
+    }); // Limpiar viajes anteriores
 
     try {
       final analyticsService = AnalyticsService();
+      final String startIso = "${_apiDateFormat.format(startDate)}T00:00:00";
+      final String endIso = "${_apiDateFormat.format(endDate)}T23:59:59";
+
       final data = await analyticsService.getCompletedTrips(
-        startDate: "${DateFormat('yyyy-MM-dd').format(startDate)}T00:00:00",
-        endDate: "${DateFormat('yyyy-MM-dd').format(endDate)}T23:59:59",
+        startDate: startIso,
+        endDate: endIso,
         driverId: selectedDriver?.id,
       );
 
-      setState(() {
-        trips = data.map((map) => Trip.fromJson(map)).toList();
-        loading = false;
-      });
+      if (mounted) {
+        setState(() {
+          trips = data.map((map) => Trip.fromJson(map)).toList();
+          trips.sort(
+            (a, b) => DateTime.parse(
+              b.createdAt,
+            ).compareTo(DateTime.parse(a.createdAt)),
+          );
+          loading = false;
+        });
+      }
     } catch (error) {
       developer.log('Error al obtener viajes: $error');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Error al obtener los viajes')),
-      );
-      setState(() {
-        loading = false;
-      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al obtener los viajes: ${error.toString()}'),
+            backgroundColor: errorColor,
+          ),
+        );
+        setState(() {
+          loading = false;
+        });
+      }
     }
   }
 
@@ -86,32 +142,235 @@ class _DriverReportsScreenState extends State<DriverReportsScreen> {
     }).toList();
   }
 
-  Future<void> _selectDate(bool isStartDate) async {
+  Future<void> _selectDate(BuildContext context, bool isStartDate) async {
+    final DateTime initial = isStartDate ? startDate : endDate;
+    final DateTime first = DateTime(2020);
+    final DateTime last = DateTime.now().add(const Duration(days: 365));
+
     final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate: isStartDate ? startDate : endDate,
-      firstDate: DateTime(2020),
-      lastDate: DateTime(2025),
+      initialDate:
+          initial.isBefore(first)
+              ? first
+              : (initial.isAfter(last) ? last : initial),
+      firstDate: first,
+      lastDate: last,
+      locale: const Locale('es', 'ES'),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: Theme.of(context).colorScheme.copyWith(
+              primary: primaryColor,
+              onPrimary: Colors.white,
+            ),
+            textButtonTheme: TextButtonThemeData(
+              style: TextButton.styleFrom(foregroundColor: primaryColor),
+            ),
+          ),
+          child: child!,
+        );
+      },
     );
 
     if (picked != null) {
       setState(() {
         if (isStartDate) {
           startDate = picked;
+          if (endDate.isBefore(startDate)) {
+            endDate = startDate;
+          }
         } else {
           endDate = picked;
+          if (startDate.isAfter(endDate)) {
+            startDate = endDate;
+          }
         }
       });
     }
   }
 
+  void _showDriverSelectionModal() {
+    setState(() {
+      searchTerm = '';
+    });
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter modalSetState) {
+            final List<DriverProfile> filteredModalDrivers =
+                drivers.where((driver) {
+                  final fullName =
+                      "${driver.firstName} ${driver.lastName}".toLowerCase();
+                  final query = searchTerm.toLowerCase();
+                  return fullName.contains(query);
+                }).toList();
+
+            return Container(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.7,
+              ),
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Seleccionar Chofer',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: textColorPrimary,
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(LucideIcons.x, color: textColorSecondary),
+                        onPressed: () => Navigator.pop(context),
+                        tooltip: 'Cerrar',
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    onChanged: (value) {
+                      modalSetState(() {
+                        searchTerm = value;
+                      });
+                    },
+                    decoration: InputDecoration(
+                      hintText: 'Buscar por nombre...',
+                      prefixIcon: Icon(
+                        LucideIcons.search,
+                        size: 20,
+                        color: textColorSecondary,
+                      ),
+                      filled: true,
+                      fillColor: inputBackgroundColor,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: borderColor),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: borderColor),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: primaryColor),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 10,
+                        horizontal: 12,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ListTile(
+                    leading: Icon(
+                      LucideIcons.users,
+                      color:
+                          selectedDriver == null
+                              ? primaryColor
+                              : textColorSecondary,
+                    ),
+                    title: Text(
+                      'Todos los Choferes',
+                      style: TextStyle(
+                        fontWeight:
+                            selectedDriver == null
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                      ),
+                    ),
+                    onTap: () {
+                      setState(() {
+                        selectedDriver = null;
+                      });
+                      Navigator.pop(context);
+                    },
+                    dense: true,
+                    selected: selectedDriver == null,
+                    selectedTileColor: primaryColor.withOpacity(0.1),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  Divider(color: borderColor.withOpacity(0.5)),
+                  Expanded(
+                    child:
+                        filteredModalDrivers.isEmpty
+                            ? Center(
+                              child: Text(
+                                'No se encontraron choferes',
+                                style: TextStyle(color: textColorSecondary),
+                              ),
+                            )
+                            : ListView.builder(
+                              shrinkWrap: true,
+                              itemCount: filteredModalDrivers.length,
+                              itemBuilder: (context, index) {
+                                final driver = filteredModalDrivers[index];
+                                final bool isCurrentlySelected =
+                                    selectedDriver?.id == driver.id;
+                                return ListTile(
+                                  leading: Icon(
+                                    LucideIcons.user,
+                                    color:
+                                        isCurrentlySelected
+                                            ? primaryColor
+                                            : textColorSecondary,
+                                  ),
+                                  title: Text(
+                                    '${driver.firstName} ${driver.lastName}',
+                                  ),
+                                  onTap: () {
+                                    setState(() {
+                                      selectedDriver = driver;
+                                    });
+                                    Navigator.pop(context);
+                                  },
+                                  dense: true,
+                                  selected: isCurrentlySelected,
+                                  selectedTileColor: primaryColor.withOpacity(
+                                    0.1,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                );
+                              },
+                            ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('Reportes de Choferes'),
+        backgroundColor: cardBackgroundColor,
+        foregroundColor: textColorPrimary,
+        elevation: 1.0,
+        title: const Text(
+          'Reportes de Viajes',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
         leading: IconButton(
-          icon: const Icon(Icons.menu),
+          icon: Icon(Icons.menu, color: iconColor),
           onPressed: () => setState(() => isSidebarVisible = true),
         ),
       ),
@@ -119,277 +378,16 @@ class _DriverReportsScreenState extends State<DriverReportsScreen> {
         children: [
           Column(
             children: [
-              // Contenedor de filtros
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
-                ),
-                child: Column(
-                  children: [
-                    // Filtros de fecha
-                    Row(
-                      children: [
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () => _selectDate(true),
-                            child: Container(
-                              height: 44,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                              ),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF8FAFC),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: const Color(0xFFE2E8F0),
-                                ),
-                              ),
-                              child: Row(
-                                children: [
-                                  const Icon(
-                                    LucideIcons.calendar,
-                                    size: 20,
-                                    color: Color(0xFFDC2626),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    DateFormat('dd/MM/yyyy').format(startDate),
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: Color(0xFF0F172A),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () => _selectDate(false),
-                            child: Container(
-                              height: 44,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                              ),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF8FAFC),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: const Color(0xFFE2E8F0),
-                                ),
-                              ),
-                              child: Row(
-                                children: [
-                                  const Icon(
-                                    LucideIcons.calendar,
-                                    size: 20,
-                                    color: Color(0xFFDC2626),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    DateFormat('dd/MM/yyyy').format(endDate),
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: Color(0xFF0F172A),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
+              _buildFilterSection(),
 
-                    // Filtro de conductor
-                    Row(
-                      children: [
-                        Expanded(
-                          child: GestureDetector(
-                            onTap:
-                                () =>
-                                    setState(() => showDrivers = !showDrivers),
-                            child: Container(
-                              height: 44,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                              ),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF8FAFC),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: const Color(0xFFE2E8F0),
-                                ),
-                              ),
-                              child: Row(
-                                children: [
-                                  const Icon(
-                                    LucideIcons.user,
-                                    size: 20,
-                                    color: Color(0xFFDC2626),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      selectedDriver != null
-                                          ? "${selectedDriver!.firstName} ${selectedDriver!.lastName}"
-                                          : "Seleccionar Chofer",
-                                      style: const TextStyle(
-                                        fontSize: 14,
-                                        color: Color(0xFF0F172A),
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  if (selectedDriver != null)
-                                    GestureDetector(
-                                      onTap:
-                                          () => setState(
-                                            () => selectedDriver = null,
-                                          ),
-                                      child: const Icon(
-                                        LucideIcons.x,
-                                        size: 16,
-                                        color: Color(0xFFDC2626),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        GestureDetector(
-                          onTap: loading ? null : _fetchTrips,
-                          child: Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Center(
-                              child:
-                                  loading
-                                      ? const SizedBox(
-                                        width: 24,
-                                        height: 24,
-                                        child: CircularProgressIndicator(
-                                          color: Color(0xFFDC2626),
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                      : const Icon(
-                                        LucideIcons.search,
-                                        size: 24,
-                                        color: Color(0xFFDC2626),
-                                      ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    // Dropdown de conductores
-                    if (showDrivers)
-                      Container(
-                        margin: const EdgeInsets.only(top: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFFE2E8F0)),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.1),
-                              blurRadius: 4,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: TextField(
-                                decoration: const InputDecoration(
-                                  hintText: "Buscar chofer...",
-                                  hintStyle: TextStyle(
-                                    color: Color(0xFF94A3B8),
-                                    fontSize: 14,
-                                  ),
-                                  border: InputBorder.none,
-                                  isDense: true,
-                                  contentPadding: EdgeInsets.zero,
-                                ),
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  color: Color(0xFF0F172A),
-                                ),
-                                onChanged:
-                                    (value) =>
-                                        setState(() => searchTerm = value),
-                              ),
-                            ),
-                            Container(
-                              constraints: const BoxConstraints(maxHeight: 200),
-                              child: ListView.builder(
-                                shrinkWrap: true,
-                                itemCount: filteredDrivers.length,
-                                itemBuilder: (context, index) {
-                                  final driver = filteredDrivers[index];
-                                  return GestureDetector(
-                                    onTap: () {
-                                      setState(() {
-                                        selectedDriver = driver;
-                                        showDrivers = false;
-                                        searchTerm = '';
-                                      });
-                                    },
-                                    child: Container(
-                                      padding: const EdgeInsets.all(12),
-                                      decoration: const BoxDecoration(
-                                        border: Border(
-                                          top: BorderSide(
-                                            color: Color(0xFFE2E8F0),
-                                          ),
-                                        ),
-                                      ),
-                                      child: Text(
-                                        "${driver.firstName} ${driver.lastName}",
-                                        style: const TextStyle(
-                                          fontSize: 14,
-                                          color: Color(0xFF0F172A),
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-
-              // Lista de viajes
               Expanded(
                 child:
-                    trips.isEmpty
-                        ? const Center(
-                          child: Text(
-                            "No hay viajes en este período",
-                            style: TextStyle(
-                              color: Color(0xFF64748B),
-                              fontSize: 16,
-                            ),
-                          ),
+                    loading
+                        ? Center(
+                          child: CircularProgressIndicator(color: primaryColor),
                         )
+                        : trips.isEmpty
+                        ? _buildEmptyState()
                         : ListView.builder(
                           padding: const EdgeInsets.all(16),
                           itemCount: trips.length,
@@ -402,7 +400,6 @@ class _DriverReportsScreenState extends State<DriverReportsScreen> {
             ],
           ),
 
-          // Sidebar
           if (isSidebarVisible)
             Sidebar(
               isVisible: isSidebarVisible,
@@ -414,161 +411,266 @@ class _DriverReportsScreenState extends State<DriverReportsScreen> {
     );
   }
 
-  Widget _buildTripCard(Trip trip) {
+  Widget _buildFilterSection() {
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 3.84,
-            offset: const Offset(0, 2),
+        color: cardBackgroundColor,
+        border: Border(bottom: BorderSide(color: borderColor.withOpacity(0.5))),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(child: _buildDateSelector(true)),
+              const SizedBox(width: 12),
+              Expanded(child: _buildDateSelector(false)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(child: _buildDriverSelector()),
+              const SizedBox(width: 12),
+              _buildSearchButton(),
+            ],
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildDateSelector(bool isStartDate) {
+    return InkWell(
+      onTap: () => _selectDate(context, isStartDate),
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        height: 48,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: inputBackgroundColor,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: borderColor),
+        ),
+        child: Row(
+          children: [
+            Icon(LucideIcons.calendar, size: 20, color: iconColor),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _displayDateFormat.format(isStartDate ? startDate : endDate),
+                style: TextStyle(fontSize: 14, color: textColorPrimary),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Icon(LucideIcons.chevronDown, size: 18, color: textColorSecondary),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDriverSelector() {
+    return InkWell(
+      onTap: _showDriverSelectionModal,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        height: 48,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: inputBackgroundColor,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: borderColor),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              selectedDriver == null ? LucideIcons.users : LucideIcons.user,
+              size: 20,
+              color: iconColor,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                selectedDriver == null
+                    ? 'Todos los Choferes'
+                    : '${selectedDriver!.firstName} ${selectedDriver!.lastName}',
+                style: TextStyle(fontSize: 14, color: textColorPrimary),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Icon(LucideIcons.chevronDown, size: 18, color: textColorSecondary),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchButton() {
+    return ElevatedButton.icon(
+      icon: Icon(LucideIcons.search, size: 18, color: buttonTextColor),
+      label: Text('Buscar', style: TextStyle(color: buttonTextColor)),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: primaryColor,
+        foregroundColor: buttonTextColor.withOpacity(0.8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+        minimumSize: const Size(0, 48),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        elevation: 2,
+      ),
+      onPressed: loading ? null : _fetchTrips,
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(LucideIcons.fileText, size: 60, color: Colors.grey.shade400),
+          const SizedBox(height: 16),
+          Text(
+            'No se encontraron viajes',
+            style: TextStyle(fontSize: 18, color: textColorSecondary),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Intenta ajustar los filtros de fecha o conductor.',
+            style: TextStyle(fontSize: 14, color: Colors.grey.shade500),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTripCard(Trip trip) {
+    String tripDate = '';
+    try {
+      tripDate = _displayDateFormat.format(
+        DateTime.parse(trip.createdAt).toLocal(),
+      );
+    } catch (e) {
+      developer.log('Error formateando fecha del viaje ${trip.id}: $e');
+      tripDate = 'Fecha inválida';
+    }
+    final String tripPrice = currencyFormatter.format(trip.price);
+
+    final String driverName =
+        trip.driver_profiles != null
+            ? '${trip.driver_profiles!.first_name} ${trip.driver_profiles!.last_name}'
+            : 'No asignado';
+    final String operatorName =
+        trip.operator_profiles != null
+            ? '${trip.operator_profiles!.first_name} ${trip.operator_profiles!.last_name}'
+            : 'No asignado';
+
+    return Card(
+      elevation: 1.5,
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: cardBackgroundColor,
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Encabezado del viaje
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  DateFormat(
-                    'dd/MM/yyyy',
-                  ).format(DateTime.parse(trip.createdAt)),
-                  style: const TextStyle(
-                    fontSize: 14,
-                    color: Color(0xFFDC2626),
-                  ),
+                Row(
+                  children: [
+                    Icon(
+                      LucideIcons.calendar,
+                      size: 16,
+                      color: textColorSecondary,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      tripDate,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: textColorSecondary,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
                 ),
                 Text(
-                  "\$${trip.price.toStringAsFixed(2)}",
-                  style: const TextStyle(
+                  tripPrice,
+                  style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFFDC2626),
+                    color: primaryColor,
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 12),
-
-            // Detalles del viaje
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(
-                  width: 60,
-                  child: Text(
-                    "Origen:",
-                    style: TextStyle(fontSize: 14, color: Color(0xFF64748B)),
-                  ),
-                ),
-                Expanded(
-                  child: Text(
-                    trip.origin,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: Color(0xFF0F172A),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(
-                  width: 60,
-                  child: Text(
-                    "Destino:",
-                    style: TextStyle(fontSize: 14, color: Color(0xFF64748B)),
-                  ),
-                ),
-                Expanded(
-                  child: Text(
-                    trip.destination,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: Color(0xFF0F172A),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+            Divider(color: borderColor.withOpacity(0.5)),
             const SizedBox(height: 12),
 
-            // Pie del viaje
-            Container(
-              padding: const EdgeInsets.only(top: 12),
-              decoration: const BoxDecoration(
-                border: Border(top: BorderSide(color: Color(0xFFE2E8F0))),
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      const SizedBox(
-                        width: 60,
-                        child: Text(
-                          "Chofer:",
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Color(0xFF64748B),
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: Text(
-                          trip.driver_profiles != null
-                              ? "${trip.driver_profiles.first_name} ${trip.driver_profiles.last_name}"
-                              : "No asignado",
-                          style: const TextStyle(
-                            fontSize: 14,
-                            color: Color(0xFF0F172A),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      const SizedBox(
-                        width: 60,
-                        child: Text(
-                          "Operador:",
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Color(0xFF64748B),
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: Text(
-                          trip.operator_profiles != null
-                              ? "${trip.operator_profiles.first_name} ${trip.operator_profiles.last_name}"
-                              : "No asignado",
-                          style: const TextStyle(
-                            fontSize: 14,
-                            color: Color(0xFF0F172A),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+            _buildDetailRow(
+              icon: LucideIcons.mapPin,
+              label: "Origen:",
+              value: trip.origin,
+            ),
+            const SizedBox(height: 8),
+            _buildDetailRow(
+              icon: LucideIcons.flag,
+              label: "Destino:",
+              value: trip.destination,
+            ),
+            const SizedBox(height: 12),
+            Divider(color: borderColor.withOpacity(0.5)),
+            const SizedBox(height: 12),
+
+            _buildDetailRow(
+              icon: LucideIcons.user,
+              label: "Chofer:",
+              value: driverName,
+            ),
+            const SizedBox(height: 8),
+            _buildDetailRow(
+              icon: LucideIcons.userCog,
+              label: "Operador:",
+              value: operatorName,
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildDetailRow({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: textColorSecondary),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 70,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 14,
+              color: textColorSecondary,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value.isNotEmpty ? value : 'N/A',
+            style: TextStyle(fontSize: 14, color: textColorPrimary),
+          ),
+        ),
+      ],
     );
   }
 }

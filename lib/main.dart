@@ -25,6 +25,8 @@ import 'screens/edit_operator_screen.dart';
 import 'services/api.dart';
 import 'screens/operators_list_screen.dart';
 import 'providers/trip_provider.dart';
+import 'screens/operator_reports_screen.dart';
+import 'package:intl/date_symbol_data_local.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,6 +37,12 @@ void main() async {
     anonKey:
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd1bmV2d2xxbXdod3N5a3B2ZnFpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzkyOTAwMTksImV4cCI6MjA1NDg2NjAxOX0.FR-CGD6ZUPSh5_0MKUYiUgYuKcyi96ACjwrmYFVJqoE',
   );
+
+  // Inicializar datos de formato para español (o el locale principal que uses)
+  // El primer argumento puede ser null para usar el locale por defecto del sistema,
+  // o especifica uno como 'es_MX' o 'es'.
+  await initializeDateFormatting(null, 'es_MX');
+  // O si solo necesitas español general: await initializeDateFormatting('es', null);
 
   runApp(
     MultiProvider(
@@ -107,17 +115,20 @@ class AdminTabs extends StatelessWidget {
       home: DefaultTabController(
         length: 2,
         child: Scaffold(
-          bottomNavigationBar: TabBar(
-            tabs: [
-              Tab(
-                icon: Icon(Icons.people, color: Colors.red),
-                text: 'Panel Admin',
-              ),
-              Tab(
-                icon: Icon(Icons.assignment, color: Colors.red),
-                text: 'Mis Viajes',
-              ),
-            ],
+          bottomNavigationBar: Container(
+            height: 55.0,
+            child: TabBar(
+              tabs: [
+                Tab(
+                  icon: Icon(Icons.people, color: Colors.red),
+                  text: 'Panel Admin',
+                ),
+                Tab(
+                  icon: Icon(Icons.assignment, color: Colors.red),
+                  text: 'Mis Viajes',
+                ),
+              ],
+            ),
           ),
           body: TabBarView(
             children: [
@@ -157,6 +168,7 @@ class AdminTabs extends StatelessWidget {
           return EditOperatorScreen(operator: operator);
         },
         '/operatorsListScreen': (context) => OperatorsListScreen(),
+        '/operatorReportsScreen': (context) => OperatorReportsScreen(),
       },
     );
   }
@@ -171,17 +183,20 @@ class DriverTabs extends StatelessWidget {
       home: DefaultTabController(
         length: 2,
         child: Scaffold(
-          bottomNavigationBar: TabBar(
-            tabs: [
-              Tab(
-                icon: Icon(Icons.directions_car, color: Colors.red),
-                text: 'Inicio',
-              ),
-              Tab(
-                icon: Icon(Icons.assignment, color: Colors.red),
-                text: 'Mis Viajes',
-              ),
-            ],
+          bottomNavigationBar: Container(
+            height: 55.0,
+            child: TabBar(
+              tabs: [
+                Tab(
+                  icon: Icon(Icons.directions_car, color: Colors.red),
+                  text: 'Inicio',
+                ),
+                Tab(
+                  icon: Icon(Icons.assignment, color: Colors.red),
+                  text: 'Mis Viajes',
+                ),
+              ],
+            ),
           ),
           body: TabBarView(
             physics: const NeverScrollableScrollPhysics(),
@@ -208,14 +223,17 @@ class OperatorTabs extends StatelessWidget {
       home: DefaultTabController(
         length: 2,
         child: Scaffold(
-          bottomNavigationBar: TabBar(
-            tabs: [
-              Tab(icon: Icon(Icons.people, color: Colors.red), text: 'Panel'),
-              Tab(
-                icon: Icon(Icons.assignment, color: Colors.red),
-                text: 'Viajes',
-              ),
-            ],
+          bottomNavigationBar: Container(
+            height: 55.0,
+            child: TabBar(
+              tabs: [
+                Tab(icon: Icon(Icons.people, color: Colors.red), text: 'Panel'),
+                Tab(
+                  icon: Icon(Icons.assignment, color: Colors.red),
+                  text: 'Viajes',
+                ),
+              ],
+            ),
           ),
           body: TabBarView(
             children: [

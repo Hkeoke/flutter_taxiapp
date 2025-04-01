@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api.dart';
 import '../widgets/sidebar.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 class AdminScreen extends StatefulWidget {
   const AdminScreen({Key? key}) : super(key: key);
@@ -18,6 +19,18 @@ class _AdminScreenState extends State<AdminScreen> {
   bool loading = true;
   bool refreshing = false;
 
+  // Define colores para consistencia
+  final Color primaryColor = Colors.red;
+  final Color scaffoldBackgroundColor = Colors.grey.shade100;
+  final Color cardBackgroundColor = Colors.white;
+  final Color textColorPrimary = Colors.black87;
+  final Color textColorSecondary = Colors.grey.shade600;
+  final Color iconColor = Colors.red;
+  final Color logoutColor = Colors.red.shade700;
+  final Color logoutBackgroundColor = Colors.red.shade50;
+  final Color listIconColor = Colors.red.shade600;
+  final Color borderColor = Colors.grey.shade300;
+
   @override
   void initState() {
     super.initState();
@@ -25,374 +38,292 @@ class _AdminScreenState extends State<AdminScreen> {
   }
 
   Future<void> fetchStats() async {
+    // No es necesario resetear loading aquí si solo se llama desde initState y handleRefresh
+    // setState(() => loading = true); // Podría causar un rebuild innecesario si ya está cargando
     try {
       final analyticsService = AnalyticsService();
       final dashboardStats = await analyticsService.getAdminDashboardStats();
-      setState(() {
-        stats = dashboardStats;
-        loading = false;
-        refreshing = false;
-      });
+      if (mounted) {
+        // Verificar si el widget sigue montado
+        setState(() {
+          stats = dashboardStats;
+          loading = false;
+          refreshing = false;
+        });
+      }
     } catch (error) {
       developer.log('Error fetching stats: $error');
-      setState(() {
-        loading = false;
-        refreshing = false;
-      });
+      if (mounted) {
+        // Verificar si el widget sigue montado
+        setState(() {
+          loading = false; // Asegúrate de detener la carga incluso si hay error
+          refreshing = false;
+        });
+        // Mostrar un mensaje de error al usuario
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al cargar estadísticas: ${error.toString()}'),
+            backgroundColor: Colors.red.shade800,
+          ),
+        );
+      }
     }
   }
 
   void handleRefresh() {
-    setState(() {
-      refreshing = true;
-    });
-    fetchStats();
+    if (!refreshing) {
+      // Evitar múltiples refrescos simultáneos
+      setState(() {
+        refreshing = true;
+      });
+      fetchStats();
+    }
   }
 
   Future<void> handleLogout() async {
     try {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       await authProvider.logout();
+      // La navegación debería ocurrir automáticamente por el listener del AuthProvider
     } catch (error) {
       developer.log('Error logging out: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al cerrar sesión: ${error.toString()}'),
+            backgroundColor: Colors.red.shade800,
+          ),
+        );
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (loading) {
-      return Scaffold(
-        appBar: AppBar(
-          title: const Text('Panel de Administración'),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.menu),
-              onPressed: () => setState(() => isSidebarVisible = true),
-            ),
-          ],
-        ),
-        body: const Center(child: CircularProgressIndicator(color: Colors.red)),
-      );
-    }
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final userRole = authProvider.user?.role ?? 'desconocido';
 
     return Scaffold(
+      backgroundColor: scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('Panel de Administración'),
+        backgroundColor: cardBackgroundColor,
+        foregroundColor: textColorPrimary,
+        elevation: 1.0,
+        title: const Text(
+          'Panel de Admin',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
         leading: IconButton(
-          icon: const Icon(Icons.menu),
-          onPressed: () => setState(() => isSidebarVisible = true),
+          icon: Icon(LucideIcons.menu, color: iconColor),
+          onPressed: () {
+            setState(() {
+              isSidebarVisible = !isSidebarVisible;
+            });
+          },
+          tooltip: 'Menú',
         ),
         actions: [
           IconButton(
             icon:
                 refreshing
-                    ? const SizedBox(
+                    ? SizedBox(
                       width: 24,
                       height: 24,
                       child: CircularProgressIndicator(
-                        color: Colors.red,
-                        strokeWidth: 2,
+                        color: primaryColor,
+                        strokeWidth: 2.5,
                       ),
                     )
-                    : const Icon(Icons.refresh),
+                    : Icon(Icons.refresh, color: iconColor),
             onPressed: refreshing ? null : handleRefresh,
+            tooltip: 'Refrescar datos',
           ),
         ],
       ),
       body: Stack(
         children: [
-          SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Sección de Gestión de Usuarios
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
-                        blurRadius: 3.84,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  padding: const EdgeInsets.all(16),
-                  margin: const EdgeInsets.only(bottom: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Gestión de Usuarios',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF0F172A),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      // Gestionar Choferes
-                      InkWell(
-                        onTap:
-                            () => Navigator.pushNamed(
-                              context,
-                              '/driverManagementScreen',
-                            ),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          decoration: const BoxDecoration(
-                            border: Border(
-                              bottom: BorderSide(color: Colors.red, width: 1),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Row(
-                                children: [
-                                  const Icon(
-                                    Icons.people,
-                                    color: Colors.red,
-                                    size: 24,
-                                  ),
-                                  const SizedBox(width: 12),
-                                  const Text(
-                                    'Gestionar Choferes',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      color: Color(0xFF334155),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const Icon(
-                                Icons.chevron_right,
-                                color: Colors.red,
-                                size: 20,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      // Gestionar Operadores
-                      InkWell(
-                        onTap:
-                            () => Navigator.pushNamed(
-                              context,
-                              '/operatorManagementScreen',
-                            ),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          decoration: const BoxDecoration(
-                            border: Border(
-                              bottom: BorderSide(color: Colors.red, width: 1),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Row(
-                                children: [
-                                  const Icon(
-                                    Icons.people,
-                                    color: Colors.red,
-                                    size: 24,
-                                  ),
-                                  const SizedBox(width: 12),
-                                  const Text(
-                                    'Gestionar Operadores',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      color: Color(0xFF334155),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const Icon(
-                                Icons.chevron_right,
-                                color: Colors.red,
-                                size: 20,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // Sección de Estadísticas
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
-                        blurRadius: 3.84,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  padding: const EdgeInsets.all(16),
-                  margin: const EdgeInsets.only(bottom: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Estadísticas',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF0F172A),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          // Viajes Hoy
-                          Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.all(12),
-                              margin: const EdgeInsets.symmetric(horizontal: 4),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF1F5F9),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Column(
-                                children: [
-                                  Text(
-                                    '${stats?['tripsToday'] ?? 0}',
-                                    style: const TextStyle(
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.red,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  const Text(
-                                    'Viajes Hoy',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Color(0xFF64748B),
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          // Choferes Activos
-                          Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.all(12),
-                              margin: const EdgeInsets.symmetric(horizontal: 4),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF1F5F9),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Column(
-                                children: [
-                                  Text(
-                                    '${stats?['activeDrivers'] ?? 0}',
-                                    style: const TextStyle(
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.red,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  const Text(
-                                    'Choferes Activos',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Color(0xFF64748B),
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          // Total Usuarios
-                          Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.all(12),
-                              margin: const EdgeInsets.symmetric(horizontal: 4),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF1F5F9),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Column(
-                                children: [
-                                  Text(
-                                    '${stats?['totalUsers'] ?? 0}',
-                                    style: const TextStyle(
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.red,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  const Text(
-                                    'Total Usuarios',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Color(0xFF64748B),
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-
-                // Botón de Cerrar Sesión
-                InkWell(
-                  onTap: handleLogout,
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFEF2F2),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(
-                          Icons.logout,
-                          color: Color(0xFFEF4444),
-                          size: 24,
-                        ),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Cerrar Sesión',
-                          style: TextStyle(
-                            color: Color(0xFFEF4444),
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
+          Positioned.fill(
+            child: Builder(
+              builder: (context) {
+                if (loading) {
+                  return Center(
+                    child: CircularProgressIndicator(color: primaryColor),
+                  );
+                } else {
+                  return _buildAdminContent();
+                }
+              },
             ),
           ),
           if (isSidebarVisible)
             Sidebar(
               isVisible: isSidebarVisible,
               onClose: () => setState(() => isSidebarVisible = false),
-              role: 'admin',
+              role: userRole,
             ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAdminContent() {
+    return RefreshIndicator(
+      onRefresh: () async => handleRefresh(),
+      color: primaryColor,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildManagementCard(),
+            const SizedBox(height: 16),
+            _buildStatsCard(),
+            const SizedBox(height: 24),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildManagementCard() {
+    return Card(
+      elevation: 2.0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: cardBackgroundColor,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Gestión de Usuarios',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: textColorPrimary,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Divider(),
+            _buildManagementListItem(
+              icon: LucideIcons.users,
+              title: 'Gestionar Choferes',
+              routeName: '/driverManagementScreen',
+            ),
+            const Divider(),
+            _buildManagementListItem(
+              icon: LucideIcons.userCog,
+              title: 'Gestionar Operadores',
+              routeName: '/operatorManagementScreen',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildManagementListItem({
+    required IconData icon,
+    required String title,
+    required String routeName,
+  }) {
+    return InkWell(
+      onTap: () => Navigator.pushNamed(context, routeName),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12.0),
+        child: Row(
+          children: [
+            Icon(icon, color: listIconColor, size: 24),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(fontSize: 16, color: textColorPrimary),
+              ),
+            ),
+            Icon(
+              LucideIcons.chevronRight,
+              color: Colors.grey.shade400,
+              size: 24,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatsCard() {
+    return Card(
+      elevation: 2.0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: cardBackgroundColor,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Estadísticas Clave',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: textColorPrimary,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildStatItem(
+                  icon: Icons.local_taxi,
+                  label: 'Viajes Hoy',
+                  value: stats?['tripsToday'] ?? 0,
+                ),
+                _buildStatItem(
+                  icon: Icons.person_pin_circle,
+                  label: 'Choferes Activos',
+                  value: stats?['activeDrivers'] ?? 0,
+                ),
+                _buildStatItem(
+                  icon: Icons.group,
+                  label: 'Total Usuarios',
+                  value: stats?['totalUsers'] ?? 0,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatItem({
+    required IconData icon,
+    required String label,
+    required int value,
+  }) {
+    return Expanded(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: iconColor, size: 28),
+          const SizedBox(height: 8),
+          Text(
+            value.toString(),
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: primaryColor,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(fontSize: 12, color: textColorSecondary),
+            textAlign: TextAlign.center,
+          ),
         ],
       ),
     );

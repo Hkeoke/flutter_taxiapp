@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/api.dart';
 import '../providers/auth_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
 
 class OperatorTripsScreen extends StatefulWidget {
   final String? operatorId;
@@ -22,14 +23,35 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
   String activeTab = 'active';
   Timer? _refreshTimer;
 
+  final Color primaryColor = Colors.red;
+  final Color scaffoldBackgroundColor = Colors.grey.shade100;
+  final Color cardBackgroundColor = Colors.white;
+  final Color textColorPrimary = Colors.black87;
+  final Color textColorSecondary = Colors.grey.shade600;
+  final Color iconColor = Colors.red;
+  final Color borderColor = Colors.grey.shade300;
+  final Color errorColor = Colors.red.shade700;
+  final Color successColor = Colors.green.shade600;
+  final Color warningColor = Colors.orange.shade700;
+  final Color infoColor = Colors.blue.shade600;
+  final Color tabInactiveColor = Colors.grey.shade500;
+
+  final DateFormat _displayDateTimeFormat = DateFormat(
+    "d MMM, yyyy HH:mm",
+    'es',
+  );
+  final currencyFormatter = NumberFormat.currency(
+    locale: 'es_MX',
+    symbol: '\$',
+  );
+
   @override
   void initState() {
     super.initState();
     loadTrips();
-    // Actualizar cada 10 segundos
     _refreshTimer = Timer.periodic(
       const Duration(seconds: 10),
-      (_) => loadTrips(),
+      (_) => loadTrips(isRefresh: true),
     );
   }
 
@@ -39,12 +61,14 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
     super.dispose();
   }
 
-  Future<void> loadTrips() async {
-    try {
+  Future<void> loadTrips({bool isRefresh = false}) async {
+    if (!isRefresh) {
       setState(() {
         loading = true;
       });
+    }
 
+    try {
       final tripService = TripService();
       final user = Provider.of<AuthProvider>(context, listen: false).user;
       final operatorId = widget.operatorId ?? user?.id;
@@ -55,18 +79,31 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
 
       final operatorTrips = await tripService.getOperatorTrips(operatorId);
 
-      setState(() {
-        trips = operatorTrips;
-        loading = false;
-      });
+      if (mounted) {
+        setState(() {
+          trips = operatorTrips;
+          trips.sort(
+            (a, b) => DateTime.parse(
+              b.createdAt,
+            ).compareTo(DateTime.parse(a.createdAt)),
+          );
+          loading = false;
+        });
+      }
     } catch (error) {
       developer.log('Error cargando viajes: $error');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudieron cargar los viajes')),
-        );
+        if (!isRefresh) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('No se pudieron cargar los viajes'),
+              backgroundColor: errorColor,
+            ),
+          );
+        }
         setState(() {
           loading = false;
+          if (!isRefresh) trips = [];
         });
       }
     }
@@ -77,24 +114,41 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
           title: const Text('Confirmar Cancelación'),
           content: const Text(
             '¿Estás seguro de que deseas cancelar este viaje?',
+            style: TextStyle(fontSize: 15),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('No'),
+              child: Text('No', style: TextStyle(color: textColorSecondary)),
             ),
             TextButton(
               onPressed: () async {
                 Navigator.of(context).pop();
                 try {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Row(
+                        children: [
+                          CircularProgressIndicator(
+                            strokeWidth: 3,
+                            color: Colors.white,
+                          ),
+                          SizedBox(width: 15),
+                          Text('Cancelando...'),
+                        ],
+                      ),
+                      backgroundColor: infoColor.withOpacity(0.8),
+                    ),
+                  );
+
                   final tripRequestService = TripRequestService();
                   final tripService = TripService();
-                  final user =
-                      Provider.of<AuthProvider>(context, listen: false).user;
-                  final userId = user?.id;
 
                   if (trip.status == 'broadcasting') {
                     await tripRequestService.cancelBroadcastingRequest(trip.id);
@@ -105,23 +159,26 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
                     );
                   }
 
-                  loadTrips();
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
+                    SnackBar(
                       content: Text('Viaje cancelado correctamente'),
+                      backgroundColor: successColor,
                     ),
                   );
+                  loadTrips();
                 } catch (error) {
                   developer.log('Error cancelando viaje: $error');
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
+                    SnackBar(
                       content: Text('No se pudo cancelar el viaje'),
+                      backgroundColor: errorColor,
                     ),
                   );
                 }
               },
-              style: TextButton.styleFrom(foregroundColor: Colors.red),
-              child: const Text('Sí'),
+              child: Text('Sí, Cancelar', style: TextStyle(color: errorColor)),
             ),
           ],
         );
@@ -131,20 +188,39 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
 
   Future<void> handleResendTrip(String tripId) async {
     try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              CircularProgressIndicator(strokeWidth: 3, color: Colors.white),
+              SizedBox(width: 15),
+              Text('Reenviando...'),
+            ],
+          ),
+          backgroundColor: infoColor.withOpacity(0.8),
+        ),
+      );
+
       final tripRequestService = TripRequestService();
       await tripRequestService.resendCancelledTrip(tripId);
 
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text('El viaje ha sido reenviado como nueva solicitud'),
+          backgroundColor: successColor,
         ),
       );
 
       loadTrips();
     } catch (error) {
       developer.log('Error reenviando viaje: $error');
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo reenviar el viaje')),
+        SnackBar(
+          content: Text('No se pudo reenviar el viaje'),
+          backgroundColor: errorColor,
+        ),
       );
     }
   }
@@ -152,17 +228,28 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
   Future<void> handleCallDriver(String? phoneNumber) async {
     if (phoneNumber == null || phoneNumber.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Número de teléfono no disponible')),
+        SnackBar(
+          content: Text('Número de teléfono no disponible'),
+          backgroundColor: warningColor,
+        ),
       );
       return;
     }
 
     final Uri uri = Uri(scheme: 'tel', path: phoneNumber);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
-    } else {
+    try {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+      } else {
+        throw 'No se puede lanzar $uri';
+      }
+    } catch (e) {
+      developer.log('Error al intentar llamar: $e');
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo realizar la llamada')),
+        SnackBar(
+          content: Text('No se pudo realizar la llamada'),
+          backgroundColor: errorColor,
+        ),
       );
     }
   }
@@ -170,48 +257,47 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
   Color getStatusColor(String status) {
     switch (status) {
       case 'broadcasting':
-        return const Color(0xFF8B5CF6); // Morado
+        return warningColor;
       case 'pending':
-        return const Color(0xFFF59E0B); // Ámbar
+        return infoColor;
       case 'in_progress':
-        return const Color(0xFF3B82F6); // Azul
+        return Colors.purple.shade500;
       case 'completed':
-        return const Color(0xFF10B981); // Verde
+        return successColor;
       case 'cancelled':
       case 'rejected':
-        return const Color(0xFFEF4444); // Rojo
+        return errorColor;
       case 'expired':
-        return const Color(0xFF9CA3AF); // Gris
+        return textColorSecondary;
       default:
-        return const Color(0xFF6B7280); // Gris oscuro
+        return textColorSecondary;
     }
   }
 
-  Widget getStatusIcon(String status) {
-    final color = getStatusColor(status);
-
+  IconData getStatusIcon(String status) {
     switch (status) {
       case 'broadcasting':
-        return Icon(LucideIcons.circleAlert, size: 20, color: color);
+        return LucideIcons.wifi;
       case 'pending':
-        return Icon(LucideIcons.clock, size: 20, color: color);
+        return LucideIcons.clock3;
       case 'in_progress':
-        return Icon(LucideIcons.circleAlert, size: 20, color: color);
+        return LucideIcons.truck;
       case 'completed':
-        return Icon(LucideIcons.circleCheck, size: 20, color: color);
+        return LucideIcons.circleCheck;
       case 'cancelled':
-      case 'expired':
       case 'rejected':
-        return Icon(LucideIcons.ban, size: 20, color: color);
+        return LucideIcons.circleX;
+      case 'expired':
+        return LucideIcons.timerOff;
       default:
-        return const SizedBox.shrink();
+        return LucideIcons.circleHelp;
     }
   }
 
   String getStatusText(String status) {
     switch (status) {
       case 'broadcasting':
-        return 'Buscando Chofer';
+        return 'Buscando';
       case 'pending':
         return 'Pendiente';
       case 'in_progress':
@@ -225,7 +311,7 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
       case 'rejected':
         return 'Rechazado';
       default:
-        return status;
+        return status.capitalize();
     }
   }
 
@@ -244,19 +330,25 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('Mis Viajes'),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        elevation: 0,
+        title: const Text(
+          'Mis Viajes (Operador)',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        backgroundColor: cardBackgroundColor,
+        foregroundColor: textColorPrimary,
+        elevation: 1.0,
       ),
       body: Column(
         children: [
           _buildTabBar(),
           Expanded(
             child:
-                loading
-                    ? const Center(child: CircularProgressIndicator())
+                loading && trips.isEmpty
+                    ? Center(
+                      child: CircularProgressIndicator(color: primaryColor),
+                    )
                     : _buildTripsList(),
           ),
         ],
@@ -266,12 +358,13 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
 
   Widget _buildTabBar() {
     return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        color: cardBackgroundColor,
+        border: Border(bottom: BorderSide(color: borderColor)),
       ),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
           _buildTab('active', 'Activos'),
           _buildTab('completed', 'Completados'),
@@ -287,13 +380,14 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
     return Expanded(
       child: InkWell(
         onTap: () => setState(() => activeTab = tabId),
+        borderRadius: BorderRadius.circular(8),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
           decoration: BoxDecoration(
             border: Border(
               bottom: BorderSide(
-                color: isActive ? const Color(0xFFDC2626) : Colors.transparent,
-                width: 2,
+                color: isActive ? primaryColor : Colors.transparent,
+                width: 2.5,
               ),
             ),
           ),
@@ -301,9 +395,9 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
             label,
             textAlign: TextAlign.center,
             style: TextStyle(
-              color:
-                  isActive ? const Color(0xFFDC2626) : const Color(0xFFFECACA),
-              fontWeight: FontWeight.w500,
+              fontSize: 14,
+              color: isActive ? primaryColor : tabInactiveColor,
+              fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
             ),
           ),
         ),
@@ -315,18 +409,46 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
     final filteredTrips = getFilteredTrips();
 
     if (filteredTrips.isEmpty) {
-      return const Center(
-        child: Text(
-          'No hay viajes para mostrar',
-          style: TextStyle(color: Color(0xFF6B7280), fontSize: 16),
-        ),
-      );
+      String message = 'No hay viajes activos en este momento.';
+      IconData icon = LucideIcons.listChecks;
+      if (activeTab == 'completed') {
+        message = 'No has completado ningún viaje.';
+        icon = LucideIcons.history;
+      } else if (activeTab == 'cancelled') {
+        message = 'No tienes viajes cancelados.';
+        icon = LucideIcons.archiveX;
+      }
+      return _buildEmptyState(icon: icon, message: message);
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(10),
-      itemCount: filteredTrips.length,
-      itemBuilder: (context, index) => _buildTripCard(filteredTrips[index]),
+    return RefreshIndicator(
+      color: primaryColor,
+      onRefresh: () => loadTrips(),
+      child: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: filteredTrips.length,
+        itemBuilder: (context, index) => _buildTripCard(filteredTrips[index]),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState({required IconData icon, required String message}) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 50, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text(
+              message,
+              style: TextStyle(fontSize: 16, color: textColorSecondary),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -336,120 +458,131 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
       'pending',
       'in_progress',
     ].contains(trip.status);
-    final canResend = ['cancelled', 'expired'].contains(trip.status);
+    final canResend = [
+      'cancelled',
+      'expired',
+      'rejected',
+    ].contains(trip.status);
+    final driverPhone = trip.driver_profiles?['phone_number'] as String?;
     final showCallDriver =
-        trip.status == 'cancelled' &&
-        trip.driverId != null &&
-        trip.driver_profiles != null;
+        trip.driverId != null && driverPhone != null && driverPhone.isNotEmpty;
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 10),
+      elevation: 1.5,
+      margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      elevation: 3,
+      color: cardBackgroundColor,
       child: Padding(
-        padding: const EdgeInsets.all(15),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Encabezado del viaje
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Chip(
+                  avatar: Icon(
+                    getStatusIcon(trip.status),
+                    size: 16,
+                    color: getStatusColor(trip.status),
+                  ),
+                  label: Text(
+                    getStatusText(trip.status),
+                    style: TextStyle(
+                      color: getStatusColor(trip.status),
+                      fontWeight: FontWeight.w500,
+                      fontSize: 13,
+                    ),
+                  ),
+                  backgroundColor: getStatusColor(trip.status).withOpacity(0.1),
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                    side: BorderSide(
+                      color: getStatusColor(trip.status).withOpacity(0.3),
+                    ),
+                  ),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
                 Row(
                   children: [
-                    getStatusIcon(trip.status),
-                    const SizedBox(width: 5),
+                    Icon(LucideIcons.dollarSign, size: 16, color: successColor),
+                    SizedBox(width: 4),
                     Text(
-                      getStatusText(trip.status),
+                      currencyFormatter.format(trip.price ?? 0.0),
                       style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: getStatusColor(trip.status),
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: successColor,
                       ),
                     ),
-                    if (showCallDriver)
-                      IconButton(
-                        icon: const Icon(
-                          LucideIcons.phone,
-                          size: 20,
-                          color: Color(0xFF3B82F6),
-                        ),
-                        onPressed:
-                            () => handleCallDriver(
-                              trip.driver_profiles != null
-                                  ? trip.driver_profiles['phone_number']
-                                  : null,
-                            ),
-                      ),
                   ],
-                ),
-                Text(
-                  '\$${trip.price}',
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF059669),
-                  ),
                 ),
               ],
             ),
+            const SizedBox(height: 12),
 
-            // Detalles del viaje
-            const SizedBox(height: 10),
-            RichText(
-              text: TextSpan(
-                style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
-                children: [
-                  const TextSpan(
-                    text: 'Origen: ',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF6B7280),
-                    ),
-                  ),
-                  TextSpan(text: trip.origin),
-                ],
-              ),
-            ),
-            const SizedBox(height: 5),
-            RichText(
-              text: TextSpan(
-                style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
-                children: [
-                  const TextSpan(
-                    text: 'Destino: ',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF6B7280),
-                    ),
-                  ),
-                  TextSpan(text: trip.destination),
-                ],
+            _buildDetailRow(icon: LucideIcons.mapPin, value: trip.origin),
+            _buildDetailRow(icon: LucideIcons.flag, value: trip.destination),
+            _buildDetailRow(
+              icon: LucideIcons.calendar,
+              value: _displayDateTimeFormat.format(
+                DateTime.parse(trip.createdAt),
               ),
             ),
 
-            // Botones de acción
+            if (trip.driver_profiles != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8.0),
+                child: _buildDetailRow(
+                  icon: LucideIcons.user,
+                  value:
+                      '${trip.driver_profiles!['first_name'] ?? ''} ${trip.driver_profiles!['last_name'] ?? ''}'
+                          .trim(),
+                  trailing:
+                      showCallDriver
+                          ? IconButton(
+                            icon: Icon(
+                              LucideIcons.phone,
+                              size: 18,
+                              color: infoColor,
+                            ),
+                            onPressed: () => handleCallDriver(driverPhone),
+                            tooltip: 'Llamar al Chofer',
+                            padding: EdgeInsets.zero,
+                            constraints: BoxConstraints(),
+                          )
+                          : null,
+                ),
+              ),
+
             if (canCancel || canResend)
               Padding(
-                padding: const EdgeInsets.only(top: 10),
+                padding: const EdgeInsets.only(top: 16),
                 child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     if (canCancel)
                       Expanded(
-                        child: ElevatedButton(
+                        child: ElevatedButton.icon(
+                          icon: Icon(LucideIcons.x, size: 16),
+                          label: const Text('Cancelar Viaje'),
                           onPressed: () => handleCancelTrip(trip),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFEF4444),
-                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            foregroundColor: Colors.white,
+                            backgroundColor: errorColor,
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 10,
+                              horizontal: 12,
+                            ),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(8),
                             ),
-                          ),
-                          child: const Text(
-                            'Cancelar Viaje',
-                            style: TextStyle(
-                              color: Colors.white,
+                            textStyle: TextStyle(
                               fontWeight: FontWeight.w500,
+                              fontSize: 14,
                             ),
                           ),
                         ),
@@ -457,20 +590,23 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
                     if (canCancel && canResend) const SizedBox(width: 10),
                     if (canResend)
                       Expanded(
-                        child: ElevatedButton(
+                        child: ElevatedButton.icon(
+                          icon: Icon(LucideIcons.send, size: 16),
+                          label: const Text('Reenviar'),
                           onPressed: () => handleResendTrip(trip.id),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF3B82F6),
-                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            foregroundColor: Colors.white,
+                            backgroundColor: infoColor,
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 10,
+                              horizontal: 12,
+                            ),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(8),
                             ),
-                          ),
-                          child: const Text(
-                            'Reenviar Solicitud',
-                            style: TextStyle(
-                              color: Colors.white,
+                            textStyle: TextStyle(
                               fontWeight: FontWeight.w500,
+                              fontSize: 14,
                             ),
                           ),
                         ),
@@ -482,5 +618,37 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildDetailRow({
+    required IconData icon,
+    required String value,
+    Widget? trailing,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(icon, size: 15, color: textColorSecondary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              value.isNotEmpty ? value : '-',
+              style: TextStyle(fontSize: 14, color: textColorPrimary),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (trailing != null) ...[const SizedBox(width: 8), trailing],
+        ],
+      ),
+    );
+  }
+}
+
+extension StringExtension on String {
+  String capitalize() {
+    if (this.isEmpty) return "";
+    return "${this[0].toUpperCase()}${this.substring(1).toLowerCase()}";
   }
 }
