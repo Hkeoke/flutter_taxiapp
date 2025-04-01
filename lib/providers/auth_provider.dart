@@ -29,6 +29,11 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  // Método público para verificar/refrescar el estado de autenticación
+  Future<void> checkAuthStatus() async {
+    await _loadUser();
+  }
+
   Future<void> login(String phoneNumber, String pin) async {
     try {
       _loading = true;

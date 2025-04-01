@@ -44,44 +44,90 @@ class TripProvider with ChangeNotifier {
   }
 
   void setCurrentRoute(Map<String, dynamic>? route) {
+    print(
+      '[TripProvider] setCurrentRoute llamado. Route data: ${route != null ? route.keys : 'null'}',
+    );
     _currentRoute = route;
-    if (route != null) {
-      if (route['polyline'] is List<LatLng>) {
-        _visibleRoute = route['polyline'] as List<LatLng>;
-      } else if (route['polyline'] is List) {
-        _visibleRoute =
-            (route['polyline'] as List)
+    List<LatLng> newVisibleRoute = []; // Empezar con lista vacía
+
+    if (route != null && route['polyline'] != null) {
+      final polylineData = route['polyline'];
+      print(
+        '[TripProvider] Procesando polylineData: ${polylineData.runtimeType}',
+      );
+
+      if (polylineData is List<LatLng>) {
+        // Caso ideal: ya es List<LatLng>
+        newVisibleRoute = polylineData;
+        print(
+          '[TripProvider] Polyline es List<LatLng>. Longitud: ${newVisibleRoute.length}',
+        );
+      } else if (polylineData is List) {
+        // Intentar convertir desde List<dynamic>
+        print(
+          '[TripProvider] Polyline es List<dynamic>. Intentando convertir...',
+        );
+        newVisibleRoute =
+            polylineData
                 .map((p) {
+                  // Añadir más checks robustos
                   if (p is LatLng) return p;
-                  if (p is List && p.length >= 2) {
-                    return LatLng(
-                      p[0] is double ? p[0] : (p[0] as num).toDouble(),
-                      p[1] is double ? p[1] : (p[1] as num).toDouble(),
-                    );
+                  if (p is List &&
+                      p.length >= 2 &&
+                      p[0] is num &&
+                      p[1] is num) {
+                    return LatLng(p[0].toDouble(), p[1].toDouble());
                   }
                   if (p is Map &&
-                      p.containsKey('lat') &&
-                      p.containsKey('lng')) {
+                      p.containsKey('latitude') &&
+                      p.containsKey('longitude') &&
+                      p['latitude'] is num &&
+                      p['longitude'] is num) {
                     return LatLng(
-                      p['lat'] is double
-                          ? p['lat']
-                          : (p['lat'] as num).toDouble(),
-                      p['lng'] is double
-                          ? p['lng']
-                          : (p['lng'] as num).toDouble(),
+                      (p['latitude'] as num).toDouble(),
+                      (p['longitude'] as num).toDouble(),
                     );
                   }
+                  // Nuevo check para formato OSRM [lon, lat]
+                  if (p is List &&
+                      p.length >= 2 &&
+                      p[0] is num &&
+                      p[1] is num) {
+                    print(
+                      '[TripProvider] Detectado posible formato OSRM [lon, lat]',
+                    );
+                    // Asegurarse de que el índice 1 (latitud) va primero en LatLng
+                    return LatLng(p[1].toDouble(), p[0].toDouble());
+                  }
+                  print(
+                    '[TripProvider] Elemento de polilínea no reconocido: $p',
+                  );
                   return null;
                 })
                 .whereType<LatLng>()
                 .toList();
+        print(
+          '[TripProvider] Conversión completada. Longitud: ${newVisibleRoute.length}',
+        );
       } else {
-        _visibleRoute = [];
+        print(
+          '[TripProvider] polylineData no es una lista: ${polylineData.runtimeType}',
+        );
       }
     } else {
-      _visibleRoute = [];
+      print('[TripProvider] Route o polyline es null.');
     }
+
+    // Solo actualizar si la ruta es diferente para evitar notificaciones innecesarias
+    // if (!listEquals(_visibleRoute, newVisibleRoute)) { // Necesita import 'package:flutter/foundation.dart';
+    print(
+      '[TripProvider] Actualizando _visibleRoute. Nueva longitud: ${newVisibleRoute.length}',
+    );
+    _visibleRoute = newVisibleRoute;
     notifyListeners();
+    // } else {
+    //   print('[TripProvider] _visibleRoute no cambió. No se notifica.');
+    // }
   }
 
   void setMarkers(Set<Marker> markers) {
@@ -104,18 +150,18 @@ class TripProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  void clearTrip() {
-    debugPrint('Limpieza del viaje iniciada');
+  void clearTrip({bool notify = true}) {
+    print('[TripProvider] clearTrip llamado.');
     _activeTrip = null;
-    _pendingRequests = [];
     _tripPhase = 'none';
     _currentRoute = null;
-    _visibleRoute = [];
-    _markers = {};
-    _polylines = {};
+    _visibleRoute.clear(); // Limpiar explícitamente
+    _markers.clear();
+    _polylines.clear();
     _currentStopIndex = -1;
-    setLoading(false);
-    notifyListeners();
+    if (notify) {
+      notifyListeners();
+    }
   }
 
   // Método para actualizar múltiples propiedades a la vez
@@ -175,6 +221,11 @@ class TripProvider with ChangeNotifier {
 
   void setVisibleRoute(List<LatLng> route) {
     _visibleRoute = route;
+    notifyListeners();
+  }
+
+  void updateVisibleRoute(List<LatLng> newRoute) {
+    _visibleRoute = newRoute;
     notifyListeners();
   }
 
@@ -247,8 +298,141 @@ class TripProvider with ChangeNotifier {
     }
   }
 
+  // Método para procesar solicitudes guardadas en segundo plano
+  Future<void> processPendingBackgroundRequests(
+    Future<void> Function(TripRequest) requestHandler,
+  ) async {
+    if (_pendingRequests.isEmpty) {
+      debugPrint('No hay solicitudes pendientes del background para procesar.');
+      return;
+    }
+
+    debugPrint(
+      'Procesando ${_pendingRequests.length} solicitudes pendientes del background...',
+    );
+    final requestsToProcess = List<TripRequest>.from(_pendingRequests);
+    _pendingRequests.clear(); // Limpiar la lista interna primero
+
+    // Notificar que la lista está vacía ahora (antes de procesar)
+    notifyListeners();
+
+    // Procesar cada solicitud
+    for (final request in requestsToProcess) {
+      try {
+        await requestHandler(request);
+      } catch (e) {
+        debugPrint(
+          'Error procesando solicitud pendiente ${request.id} desde el background: $e',
+        );
+        // Considerar si volver a añadirla a pendientes o descartarla
+      }
+    }
+
+    // Limpiar SharedPreferences después de procesar
+    await _clearPendingRequestsFromPrefs();
+    debugPrint('Solicitudes pendientes del background procesadas.');
+  }
+
+  // Método privado para limpiar las solicitudes de SharedPreferences
+  Future<void> _clearPendingRequestsFromPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('pending_requests');
+      debugPrint('Solicitudes pendientes eliminadas de SharedPreferences.');
+    } catch (e) {
+      debugPrint(
+        'Error eliminando solicitudes pendientes de SharedPreferences: $e',
+      );
+    }
+  }
+
   // Método para verificar si una solicitud ya está en la lista
   bool hasRequest(String requestId) {
     return _pendingRequests.any((r) => r.id == requestId);
   }
+
+  // --- Métodos añadidos para compatibilidad con DriverHomeScreen ---
+
+  // Verifica si existe una solicitud pendiente con el ID dado
+  bool hasPendingRequest(String requestId) {
+    return _pendingRequests.any((r) => r.id == requestId);
+  }
+
+  // Establece una nueva solicitud pendiente (generalmente solo una a la vez en UI)
+  void setNewPendingRequest(TripRequest request, Map<String, dynamic>? route) {
+    _pendingRequests = [request]; // Reemplaza las existentes
+    setCurrentRoute(route); // Establece la ruta asociada
+    // No es necesario guardar en prefs aquí, se maneja en saveBackgroundRequest
+    notifyListeners();
+  }
+
+  // Obtiene una solicitud pendiente por su ID
+  TripRequest? getPendingRequestById(String requestId) {
+    try {
+      return _pendingRequests.firstWhere((r) => r.id == requestId);
+    } catch (e) {
+      return null; // No encontrada
+    }
+  }
+
+  // Limpia todas las solicitudes pendientes (usado al rechazar o aceptar)
+  void clearPendingRequests() {
+    print('[TripProvider] clearPendingRequests llamado.');
+    if (_pendingRequests.isNotEmpty) {
+      _pendingRequests.clear();
+      _currentRoute = null; // Limpiar ruta asociada a la solicitud
+      _visibleRoute.clear(); // Limpiar ruta visible
+      _markers.clear(); // Limpiar marcadores asociados
+      _polylines.clear(); // Limpiar polilíneas asociadas
+      _clearPendingRequestsFromPrefs(); // Limpiar persistencia también
+      notifyListeners();
+    }
+  }
+
+  // Añade una solicitud recibida en segundo plano (similar a saveBackgroundRequest pero sin notificar inmediatamente?)
+  // Reutilizamos saveBackgroundRequest ya que hace lo necesario
+  void addBackgroundRequest(TripRequest request) {
+    saveBackgroundRequest(request);
+  }
+
+  // Establece el viaje activo y la fase inicial
+  void startActiveTrip(Trip trip, String initialPhase) {
+    print('[TripProvider] startActiveTrip llamado para viaje: ${trip.id}');
+    _activeTrip = trip;
+    _tripPhase = initialPhase;
+    _pendingRequests.clear();
+    _currentStopIndex = -1; // Resetear índice de parada
+
+    // QUITAR ESTO: No limpiar la ruta aquí, se establecerá justo después
+    // _currentRoute = null;
+    // _visibleRoute.clear();
+    // _markers.clear(); // Los marcadores se reconstruirán
+    // _polylines.clear(); // Las polilíneas se reconstruirán
+
+    _clearPendingRequestsFromPrefs(); // Limpiar persistencia de solicitudes
+    notifyListeners(); // Notificar cambio de estado (sin ruta aún)
+  }
+
+  // Actualiza la fase del viaje, índice de parada y ruta
+  void updateTripPhaseAndRoute(
+    String nextPhase,
+    int nextStopIndex,
+    Map<String, dynamic>? newRoute,
+  ) {
+    _tripPhase = nextPhase;
+    _currentStopIndex = nextStopIndex;
+    setCurrentRoute(newRoute); // Esto ya notifica
+  }
+
+  // Restaura un viaje activo desde persistencia
+  void restoreActiveTrip(Trip tripData, String tripPhase, int stopIndex) {
+    _activeTrip = tripData;
+    _tripPhase = tripPhase;
+    _currentStopIndex = stopIndex;
+    // La ruta se recalculará si es necesario en DriverHomeScreen
+    _pendingRequests.clear(); // Asegurar que no haya pendientes
+    notifyListeners();
+  }
+
+  // Limpia el estado del viaje (puede mantener o no las solicitudes pendientes)
 }
