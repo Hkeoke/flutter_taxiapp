@@ -69,15 +69,19 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
     }
 
     try {
+      print('Iniciando carga de viajes...');
       final tripService = TripService();
       final user = Provider.of<AuthProvider>(context, listen: false).user;
       final operatorId = widget.operatorId ?? user?.id;
+
+      print('ID del operador: $operatorId');
 
       if (operatorId == null) {
         throw Exception('ID de operador no disponible');
       }
 
       final operatorTrips = await tripService.getOperatorTrips(operatorId);
+      print('Viajes obtenidos: ${operatorTrips.length}');
 
       if (mounted) {
         setState(() {
@@ -89,14 +93,16 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
           );
           loading = false;
         });
+        print('Estado actualizado. Total de viajes: ${trips.length}');
       }
-    } catch (error) {
-      developer.log('Error cargando viajes: $error');
+    } catch (error, stackTrace) {
+      print('Error cargando viajes: $error');
+      print('Stack trace: $stackTrace');
       if (mounted) {
         if (!isRefresh) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('No se pudieron cargar los viajes'),
+              content: Text('No se pudieron cargar los viajes: $error'),
               backgroundColor: errorColor,
             ),
           );
@@ -168,7 +174,7 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
                   );
                   loadTrips();
                 } catch (error) {
-                  developer.log('Error cancelando viaje: $error');
+                  print('Error cancelando viaje: $error');
                   ScaffoldMessenger.of(context).hideCurrentSnackBar();
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
@@ -214,7 +220,7 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
 
       loadTrips();
     } catch (error) {
-      developer.log('Error reenviando viaje: $error');
+      print('Error reenviando viaje: $error');
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -244,7 +250,7 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
         throw 'No se puede lanzar $uri';
       }
     } catch (e) {
-      developer.log('Error al intentar llamar: $e');
+      print('Error al intentar llamar: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('No se pudo realizar la llamada'),
@@ -316,19 +322,34 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
   }
 
   List<Trip> getFilteredTrips() {
-    return trips.where((trip) {
-      if (activeTab == 'active') {
-        return ['broadcasting', 'pending', 'in_progress'].contains(trip.status);
-      }
-      if (activeTab == 'cancelled') {
-        return ['cancelled', 'expired', 'rejected'].contains(trip.status);
-      }
-      return trip.status == activeTab;
-    }).toList();
+    print('Filtrando viajes. Total antes de filtrar: ${trips.length}');
+    final filtered =
+        trips.where((trip) {
+          if (activeTab == 'active') {
+            return [
+              'broadcasting',
+              'pending',
+              'in_progress',
+            ].contains(trip.status.toLowerCase());
+          }
+          if (activeTab == 'cancelled') {
+            return [
+              'cancelled',
+              'expired',
+              'rejected',
+            ].contains(trip.status.toLowerCase());
+          }
+          return trip.status.toLowerCase() == activeTab;
+        }).toList();
+    print('Viajes filtrados para tab $activeTab: ${filtered.length}');
+    return filtered;
   }
 
   @override
   Widget build(BuildContext context) {
+    print(
+      'Construyendo OperatorTripsScreen. Loading: $loading, Total trips: ${trips.length}',
+    );
     return Scaffold(
       backgroundColor: scaffoldBackgroundColor,
       appBar: AppBar(
@@ -347,7 +368,14 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
             child:
                 loading && trips.isEmpty
                     ? Center(
-                      child: CircularProgressIndicator(color: primaryColor),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          CircularProgressIndicator(color: primaryColor),
+                          SizedBox(height: 16),
+                          Text('Cargando viajes...'),
+                        ],
+                      ),
                     )
                     : _buildTripsList(),
           ),
@@ -407,6 +435,7 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
 
   Widget _buildTripsList() {
     final filteredTrips = getFilteredTrips();
+    print('Construyendo lista de viajes. Filtrados: ${filteredTrips.length}');
 
     if (filteredTrips.isEmpty) {
       String message = 'No hay viajes activos en este momento.';
@@ -427,7 +456,13 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
       child: ListView.builder(
         padding: const EdgeInsets.all(16),
         itemCount: filteredTrips.length,
-        itemBuilder: (context, index) => _buildTripCard(filteredTrips[index]),
+        itemBuilder: (context, index) {
+          final trip = filteredTrips[index];
+          print(
+            'Construyendo viaje ${index + 1}/${filteredTrips.length}: ${trip.id}',
+          );
+          return _buildTripCard(trip);
+        },
       ),
     );
   }

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math';
 import 'dart:convert';
-import 'dart:isolate';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -169,14 +168,42 @@ void onStart(ServiceInstance service) async {
     // Función para manejar la recepción de solicitudes
     Future<void> handleRequest(dynamic payload) async {
       try {
-        print('BG Service: Solicitud recibida: $payload');
-        if (payload is! Map<String, dynamic>) {
-          print('BG Service Error: Payload inesperado: ${payload.runtimeType}');
-          return;
+        // {{ Edit: Check if the payload is already a TripRequest }}
+        if (payload is! TripRequest) {
+          // Si no es un TripRequest, podría ser un error o un tipo inesperado.
+          // Intentar parsear si es un Map (aunque no debería pasar desde api.dart)
+          if (payload is Map<String, dynamic>) {
+            print(
+              'BG Service Warning: Recibido Map inesperado, intentando parsear...',
+            );
+            try {
+              final request = TripRequest.fromJson(payload);
+              // Continuar con la lógica si el parseo fue exitoso...
+              print(
+                'BG Service: Solicitud parseada desde Map inesperado: ${request.id}',
+              );
+              // ... (resto de la lógica duplicada o refactorizada)
+              // Por simplicidad, salimos si no es TripRequest directamente
+              return;
+            } catch (e) {
+              print('BG Service Error: Falló el parseo del Map inesperado: $e');
+              return;
+            }
+          } else {
+            print(
+              'BG Service Error: Payload inesperado recibido: ${payload.runtimeType}',
+            );
+            return;
+          }
         }
-        final request = TripRequest.fromJson(payload);
 
-        print('BG Service: Solicitud parseada: ${request.id}');
+        // {{ Edit: Assign the payload directly to the request variable, as it's already parsed }}
+        final request =
+            payload as TripRequest; // Ahora sabemos que es un TripRequest
+
+        print(
+          'BG Service: Solicitud TripRequest recibida directamente: ${request.id}',
+        );
 
         // Enviar mensaje a la app principal (si está activa)
         service.invoke('newRequest', {'request': jsonEncode(request.toJson())});
@@ -329,6 +356,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   // Suscripciones Realtime (manejadas centralmente)
   RealtimeChannel? _requestSubscription;
   RealtimeChannel? _tripSubscription;
+  RealtimeChannel? _balanceSubscription; // <- NUEVO: Canal para balance
+  double? _currentBalance; // <- NUEVO: Variable para guardar el balance actual
 
   @override
   void initState() {
@@ -337,8 +366,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     // Obtener instancias de Provider SIN escuchar cambios aquí
     _tripProvider = Provider.of<TripProvider>(context, listen: false);
     _authProvider = Provider.of<AuthProvider>(context, listen: false);
-    _initializeApp();
+    // _initializeApp(); // _initializeApp se llama ahora desde _fetchInitialBalance
     _setupBackgroundServiceListener(); // Escuchar mensajes del servicio BG
+    _fetchInitialBalance(); // <- NUEVO: Cargar balance inicial y luego inicializar el resto
   }
 
   @override
@@ -354,10 +384,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     WidgetsBinding.instance.removeObserver(this);
     _unsubscribeFromRequests(); // Asegurar limpieza
     _unsubscribeFromTripUpdates(); // Asegurar limpieza
+    _unsubscribeFromBalanceUpdates(); // <- NUEVO: Limpiar suscripción de balance
     _audioPlayer.dispose();
-    _location.onLocationChanged.listen(
-      null,
-    ); // Detener escucha explícita si aún existe
+    _locationSubscription?.cancel(); // Cancelar suscripción de ubicación
     // No detener el servicio en segundo plano aquí, se maneja en didChangeAppLifecycleState
     super.dispose();
   }
@@ -445,31 +474,33 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   // --- Inicialización ---
 
   Future<void> _initializeApp() async {
-    print("Inicializando App...");
-    setState(() => _isLoading = true);
+    print("Inicializando App (post-balance)...");
+    // Ya no necesitamos cargar el balance aquí, se hizo en _fetchInitialBalance
+    // setState(() => _isLoading = true); // isLoading ya está en true desde fetchInitialBalance
     try {
-      await _authProvider.checkAuthStatus();
+      // await _authProvider.checkAuthStatus(); // Ya se hizo implícitamente al obtener el user ID
       await _loadRejectedRequests();
-      await _initializeNotifications(); // Inicializar notificaciones y canales
-      await _checkNotificationPermission(); // Verificar permiso de notificaciones
-      await _setupLocationServiceImproved(); // Configurar ubicación (incluye permisos de ubicación)
-      await _loadDriverStatusFromPrefs(); // Cargar estado onDuty
+      await _initializeNotifications();
+      await _checkNotificationPermission();
+      await _setupLocationServiceImproved();
+      await _loadDriverStatusFromPrefs();
       await _restoreStateIfNeeded();
-      _initializeSubscriptions(); // Suscripciones Realtime si aplica
+      _initializeSubscriptions(); // Suscripciones Realtime (incluyendo balance)
     } catch (e, s) {
-      print('Error durante la inicialización: $e\n$s');
-      // Mostrar error al usuario si es crítico
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error al inicializar: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      print('Error durante la inicialización post-balance: $e\n$s');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al inicializar: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
       }
-      print("Inicialización completada.");
+      print("Inicialización post-balance completada.");
     }
   }
 
@@ -862,6 +893,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   // --- Suscripciones Realtime ---
 
   void _initializeSubscriptions() {
+    print("Inicializando suscripciones Realtime...");
     // Si hay un viaje activo, suscribirse a sus actualizaciones
     if (_tripProvider.activeTrip != null) {
       _subscribeToTripUpdates(_tripProvider.activeTrip!.id);
@@ -869,7 +901,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     // Si está en servicio y NO hay viaje activo, suscribirse a nuevas solicitudes
     else if (_isOnDuty) {
       _subscribeToDriverRequests();
+    } else {
+      print("No en servicio y sin viaje activo, no se suscribe a solicitudes.");
     }
+    // Suscribirse a actualizaciones de balance independientemente del estado de servicio/viaje
+    _subscribeToBalanceUpdates(); // <- Llamar a la suscripción de balance
   }
 
   void _subscribeToRequests() {
@@ -963,22 +999,51 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   }
 
   void _subscribeToTripUpdates(String tripId) {
-    _unsubscribeFromTripUpdates(); // Limpiar suscripción anterior si existe
-
-    print('Suscribiéndose a actualizaciones del viaje: $tripId');
+    _unsubscribeFromTripUpdates();
+    print(
+      '[UI DEBUG] Attempting to subscribe to trip updates for ID: $tripId',
+    ); // LOG
     try {
-      _tripSubscription = tripRequestService.subscribeToTripUpdates(tripId, (
-        payload,
-      ) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            print('Actualización de viaje recibida: $payload');
-            _handleTripUpdate(payload);
-          }
-        });
-      }, (error) => print('Error en suscripción de viaje: $error'));
+      _tripSubscription = tripRequestService.subscribeToTripUpdates(
+        tripId,
+        (payload) {
+          print(
+            '[UI DEBUG] Trip Update Payload Received (UI Layer) for $tripId: $payload',
+          ); // LOG
+          // Considerar quitar addPostFrameCallback temporalmente si da problemas
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              print(
+                '[UI DEBUG] Handling trip update inside mounted check.',
+              ); // LOG
+              _handleTripUpdate(payload);
+            } else {
+              print(
+                '[UI DEBUG] Received trip update but widget not mounted for $tripId.',
+              ); // LOG
+            }
+          });
+        },
+        (error) {
+          print(
+            '[UI DEBUG] Error in trip subscription (UI Layer) for $tripId: $error',
+          ); // LOG
+        },
+      );
     } catch (e) {
-      print("Error al iniciar suscripción a trip updates: $e");
+      print(
+        "[UI DEBUG] Error initiating subscription to trip updates: $e",
+      ); // LOG
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'No se pudo conectar a las actualizaciones del viaje: $e',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -1144,11 +1209,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         final userId = _authProvider.user?.id;
         if (userId == null) throw Exception("Usuario no autenticado");
 
-        // 1. Intento Atómico de Aceptar
         final success = await tripRequestService.attemptAcceptRequest(
           requestId,
           userId,
         );
+        final confirm = await tripRequestService.confirmRequestAcceptance(
+          requestId,
+          userId,
+        );
+        print(confirm["id"]);
 
         if (!success) {
           print("Fallo al aceptar: Solicitud $requestId ya no disponible.");
@@ -1168,7 +1237,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
         // Crear objeto Trip localmente basado en la solicitud aceptada
         final activeTrip = Trip(
-          id: requestId, // Usar el ID de la solicitud como ID del viaje (o obtenerlo si es diferente)
+          id: confirm["id"], // Usar el ID de la solicitud como ID del viaje (o obtenerlo si es diferente)
           origin: currentRequest.origin,
           destination: currentRequest.destination,
           originLat: currentRequest.originLat,
@@ -1187,6 +1256,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         // 3. Actualizar estado en el provider y localmente
         // Usar el método renombrado startActiveTrip
         _tripProvider.startActiveTrip(activeTrip, TRIP_PHASE_TO_PICKUP);
+        _subscribeToTripUpdates(activeTrip.id);
 
         // 4. Calcular y mostrar la ruta hacia el punto de recogida
         if (_userLocation != null) {
@@ -1487,55 +1557,53 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   // Maneja actualizaciones recibidas por la suscripción del viaje activo
   void _handleTripUpdate(Map<String, dynamic> tripData) {
-    final activeTrip = _tripProvider.activeTrip;
-    if (activeTrip == null || tripData['id'] != activeTrip.id) {
+    print('[UI DEBUG] _handleTripUpdate called with data: $tripData'); // LOG
+    if (!mounted) {
       print(
-        "Actualización de viaje recibida para un viaje no activo o diferente. Ignorando.",
-      );
-      return; // Ignorar si no es para el viaje actual
+        '[UI DEBUG] _handleTripUpdate called but widget not mounted.',
+      ); // LOG
+      return;
     }
 
-    final updatedStatus = tripData['status'] as String?;
+    final status = tripData['status'] as String?;
+    final tripId = tripData['id'] as String?;
+    print('[UI DEBUG] Trip status from update: $status for ID: $tripId'); // LOG
 
-    if (updatedStatus == TRIP_STATUS_CANCELLED) {
+    if (_tripProvider.activeTrip == null ||
+        _tripProvider.activeTrip!.id != tripId) {
       print(
-        "Viaje ${activeTrip.id} cancelado por otra parte (pasajero/admin).",
-      );
-      _stopAlerts(); // Detener sonidos/notificaciones si las hubiera
+        '[UI DEBUG] Ignoring update for $tripId, active trip is ${_tripProvider.activeTrip?.id}',
+      ); // LOG
+      return;
+    }
 
-      // Limpiar estado local
-      _tripProvider.clearTrip();
+    if (status == TRIP_STATUS_CANCELLED) {
+      // Asegúrate que TRIP_STATUS_CANCELLED sea 'cancelled'
+      print('[UI DEBUG] Cancellation detected for trip $tripId.'); // LOG
       _unsubscribeFromTripUpdates();
-      if (_isOnDuty) {
-        _subscribeToDriverRequests(); // Volver a escuchar si está en servicio
-      }
+      print('[UI DEBUG] Calling _tripProvider.clearTrip()'); // LOG
+      _tripProvider.clearTrip(); // Esto debería notificar y reconstruir la UI
+      print('[UI DEBUG] Called _tripProvider.clearTrip()'); // LOG
+      _stopAlerts();
 
-      // Mostrar diálogo informativo
-      showDialog(
-        context: context,
-        barrierDismissible: false, // No cerrar tocando fuera
-        builder:
-            (context) => AlertDialog(
-              title: const Text('Viaje Cancelado'),
-              content: const Text(
-                'El viaje ha sido cancelado por el pasajero o administrador.',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('OK'),
-                ),
-              ],
-            ),
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('El viaje ha sido cancelado.'),
+          backgroundColor: Colors.orange,
+        ),
       );
+      if (_isOnDuty) {
+        print(
+          '[UI DEBUG] Resubscribing to driver requests after cancellation.',
+        ); // LOG
+        _subscribeToDriverRequests();
+      }
+    } else {
+      print(
+        '[UI DEBUG] Received trip update with unhandled status: $status',
+      ); // LOG
+      // Manejar otros estados si es necesario
     }
-    // Aquí podrías manejar otras actualizaciones de estado si fueran relevantes
-    // Por ejemplo, si el pasajero añade una parada a mitad del viaje.
-    // else if (tripData['trip_stops'] != null) {
-    //    final updatedStops = (tripData['trip_stops'] as List).map((s) => TripStop.fromJson(s)).toList();
-    //    _tripProvider.updateTripStops(updatedStops);
-    //    // Recalcular ruta si es necesario
-    // }
   }
 
   // --- Cálculo de Ruta ---
@@ -2218,6 +2286,81 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     return distance <= maxDistance;
   }
 
+  // --- NUEVO: Métodos para suscripción de balance ---
+  void _subscribeToBalanceUpdates() {
+    final userId =
+        _authProvider.user?.driverProfile?.id; // Acceder via AuthProvider
+    if (userId == null) {
+      print("No se suscribe a balance: userId es nulo.");
+      return;
+    }
+
+    _unsubscribeFromBalanceUpdates(); // Asegurar que no haya suscripciones previas
+
+    print(
+      'Suscribiéndose a actualizaciones de balance para conductor: $userId',
+    );
+    try {
+      _balanceSubscription = driverService.subscribeToBalanceUpdates(
+        userId,
+        (newBalance) {
+          // Callback cuando llega una actualización de balance
+          if (mounted) {
+            print("Actualización de balance recibida en UI: $newBalance");
+            setState(() {
+              _currentBalance = newBalance;
+              // Opcional: Actualizar también el balance en AuthProvider si es necesario
+              // _authProvider.updateBalance(newBalance); // Necesitarías añadir este método en AuthProvider
+            });
+            // Opcional: Mostrar una notificación o feedback visual breve
+            // ScaffoldMessenger.of(context).showSnackBar(
+            //   SnackBar(
+            //       content: Text('Balance actualizado: \$${newBalance.toStringAsFixed(2)}'),
+            //       duration: Duration(seconds: 2),
+            //       backgroundColor: Colors.green,
+            //   ),
+            // );
+          }
+        },
+        (error) {
+          // Callback en caso de error en la suscripción
+          print('Error en suscripción de balance: $error');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error en conexión de balance: $error'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+          // Considerar lógica de reintento aquí si es necesario
+        },
+      );
+    } catch (e) {
+      print("Error al iniciar suscripción a balance: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo conectar al balance: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void _unsubscribeFromBalanceUpdates() {
+    if (_balanceSubscription != null) {
+      print("Desuscribiendo de actualizaciones de balance...");
+      try {
+        driverService.unsubscribeFromBalanceUpdates(_balanceSubscription!);
+      } catch (e) {
+        print("Error al desuscribir de balance: $e");
+      }
+      _balanceSubscription = null;
+    }
+  }
+
   // --- Build Method ---
 
   @override
@@ -2245,7 +2388,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         });
 
         return Scaffold(
-          // appBar: AppBar(title: Text("Modo Conductor")), // Opcional: AppBar
+          // Ya no usamos AppBar aquí para tener más espacio para elementos flotantes
+          // appBar: AppBar(title: Text("Modo Conductor")),
           body: Stack(
             children: [
               // Mapa de Google
@@ -2261,10 +2405,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                 onMapCreated: _onMapCreated,
                 // Opcional: Añadir padding si hay elementos flotantes arriba/abajo
                 padding: EdgeInsets.only(
-                  bottom: _calculateMapPadding(
-                    tripProvider,
-                  ), // Usar función helper
-                  top: 60,
+                  bottom: _calculateMapPadding(tripProvider),
+                  top:
+                      85, // Aumentar padding superior para los botones y balance
                 ),
                 gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
                   Factory<OneSequenceGestureRecognizer>(
@@ -2321,6 +2464,54 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
                   child: const Icon(Icons.my_location, color: Colors.redAccent),
                 ),
               ),
+
+              // --- NUEVO: Widget Flotante para el Balance ---
+              Positioned(
+                top: 45, // Misma altura que los otros botones
+                left: 70, // Espacio desde la izquierda
+                right: 70, // Espacio desde la derecha
+                child: Center(
+                  // Centrar el contenido horizontalmente
+                  child: Card(
+                    elevation: 4,
+                    color: Colors.white.withOpacity(
+                      0.9,
+                    ), // Ligera transparencia
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12.0,
+                        vertical: 6.0,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min, // Ajustar al contenido
+                        children: [
+                          Icon(
+                            LucideIcons.wallet, // Icono de billetera
+                            color: Colors.green[700],
+                            size: 18,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            // Mostrar balance o un placeholder si aún no se carga
+                            _currentBalance != null
+                                ? '\$${_currentBalance!.toStringAsFixed(2)}'
+                                : '---.--',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green[800],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              // --- Fin Widget Flotante para el Balance ---
 
               // Switch En Servicio / Fuera de Servicio
               Positioned(
@@ -2913,11 +3104,47 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     if (tripProvider.activeTrip != null) {
       return 180; // Espacio para el panel de viaje activo
     } else if (tripProvider.pendingRequests.isNotEmpty) {
-      // Estimar altura del DraggableScrollableSheet (initial * screen_height)
-      // O usar un valor fijo grande si es más simple
       return 280; // Espacio generoso para el panel de solicitud
     } else {
       return 90; // Espacio para el switch 'En Servicio'
+    }
+  }
+
+  // --- NUEVO: Cargar balance inicial y luego inicializar el resto ---
+  Future<void> _fetchInitialBalance() async {
+    print("Cargando balance inicial...");
+    setState(() => _isLoading = true); // Mostrar loader al inicio
+    final driverId =
+        _authProvider.user?.driverProfile?.id; // Acceder via AuthProvider
+
+    if (driverId != null) {
+      try {
+        final profile = await driverService.getDriverProfile(driverId);
+        if (mounted) {
+          setState(() {
+            _currentBalance = profile.balance;
+          });
+          print("Balance inicial cargado: $_currentBalance");
+        }
+      } catch (e) {
+        print("Error al cargar balance inicial: $e");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error al cargar balance: ${e.toString()}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } else {
+      print("No se pudo obtener el ID del conductor para cargar el balance.");
+      // Opcional: Mostrar mensaje si no hay ID
+    }
+
+    // Después de intentar cargar el balance, continuar con el resto de la inicialización
+    if (mounted) {
+      await _initializeApp(); // Llamar al resto de la inicialización
     }
   }
 } // Fin de _DriverHomeScreenState

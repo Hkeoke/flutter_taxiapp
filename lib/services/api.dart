@@ -941,6 +941,94 @@ class DriverService {
       rethrow;
     }
   }
+
+  RealtimeChannel subscribeToBalanceUpdates(
+    String driverId,
+    Function(double newBalance) onUpdate,
+    Function(dynamic error) onError,
+  ) {
+    try {
+      // Usar un nombre de canal único para esta suscripción específica
+      final channelName =
+          'driver_balance_${driverId}_${DateTime.now().millisecondsSinceEpoch}';
+      final channel = supabase.channel(channelName);
+
+      channel
+          .onPostgresChanges(
+            event: PostgresChangeEvent.update, // Escuchar solo actualizaciones
+            schema: 'public',
+            table: 'driver_profiles',
+            filter: PostgresChangeFilter(
+              // Filtrar por el ID del conductor
+              type: PostgresChangeFilterType.eq,
+              column: 'id',
+              value: driverId,
+            ),
+            callback: (payload) {
+              try {
+                print('Payload de balance recibido: ${payload.eventType}');
+                final newRecord = payload.newRecord;
+                if (newRecord != null && newRecord.containsKey('balance')) {
+                  // Extraer el nuevo balance
+                  final newBalance = (newRecord['balance'] as num).toDouble();
+                  print('Nuevo balance detectado: $newBalance');
+                  // Llamar al callback con el nuevo balance
+                  onUpdate(newBalance);
+                } else {
+                  print(
+                    'Payload de balance no contenía la clave "balance" o era nulo.',
+                  );
+                }
+              } catch (e, stackTrace) {
+                print('Error procesando payload de balance: $e');
+                print('Stack trace: $stackTrace');
+                onError(e); // Notificar el error de procesamiento
+              }
+            },
+          )
+          .subscribe((status, [error]) {
+            if (status == RealtimeSubscribeStatus.subscribed) {
+              print('Suscripción a balance exitosa para $driverId.');
+            } else if (status == RealtimeSubscribeStatus.closed) {
+              print('Suscripción a balance cerrada.');
+              // Podrías intentar reconectar aquí si es necesario
+            } else if (status == RealtimeSubscribeStatus.channelError ||
+                error != null) {
+              print('Error en canal de balance $channelName: $error');
+              onError(
+                error ?? Exception('Error desconocido en el canal de balance'),
+              );
+            } else if (status == RealtimeSubscribeStatus.timedOut) {
+              print('Suscripción a balance $channelName timed out.');
+              onError(Exception('Suscripción a balance timed out'));
+            }
+          });
+
+      return channel;
+    } catch (e) {
+      print('Error configurando suscripción a balance: $e');
+      onError(e);
+      // Devolver un canal dummy en caso de error para evitar null checks
+      return supabase.channel(
+        'error_balance_channel_${DateTime.now().millisecondsSinceEpoch}',
+      );
+    }
+  }
+
+  void unsubscribeFromBalanceUpdates(RealtimeChannel channel) {
+    try {
+      print('Desuscribiendo del canal de balance: ${channel.topic}');
+      supabase.removeChannel(channel);
+    } catch (e) {
+      print('Error al remover canal de balance (intentando unsubscribe): $e');
+      // Intenta desuscribir directamente como fallback
+      try {
+        channel.unsubscribe();
+      } catch (innerError) {
+        print('Error al intentar channel.unsubscribe(): $innerError');
+      }
+    }
+  }
 }
 
 class OperatorService {
@@ -1097,21 +1185,6 @@ class OperatorService {
     return OperatorProfile.fromJson(response);
   }
 
-  Future<List<Trip>> getOperatorTrips(String operatorId) async {
-    try {
-      final response = await supabase
-          .from('trips')
-          .select('*, driver_profiles(*)')
-          .eq('operator_id', operatorId)
-          .order('created_at', ascending: false);
-
-      return (response as List).map((trip) => Trip.fromJson(trip)).toList();
-    } catch (error) {
-      developer.log('Error obteniendo viajes del operador: $error');
-      throw Exception('No se pudieron cargar los viajes');
-    }
-  }
-
   Future<User> updateOperatorStatus(String operatorId, bool isActive) async {
     final response =
         await supabase
@@ -1172,7 +1245,7 @@ class TripService {
 
   Future<List<Trip>> getOperatorTrips(String operatorId) async {
     try {
-      // Obtener la fecha de inicio y fin del día actual
+      print('Iniciando getOperatorTrips para operador: $operatorId');
       final today = DateTime.now();
       final startOfDay =
           DateTime(today.year, today.month, today.day).toIso8601String();
@@ -1187,60 +1260,81 @@ class TripService {
             999,
           ).toIso8601String();
 
-      // Obtener viajes
+      print('Rango de fechas: $startOfDay hasta $endOfDay');
+
+      // Obtener viajes sin el join
+      print('Consultando viajes...');
       final trips = await supabase
           .from('trips')
-          .select('*, driver_profiles(*)')
-          .eq('created_by', operatorId) // Cambiar operator_id por created_by
+          .select()
+          .eq('created_by', operatorId)
           .gte('created_at', startOfDay)
           .lte('created_at', endOfDay)
           .order('created_at', ascending: false);
 
-      // Obtener solicitudes en broadcasting y expiradas
+      print('Viajes encontrados: ${trips.length}');
+
+      // Convertir viajes y obtener información del conductor si existe
+      final List<Trip> tripList = await Future.wait(
+        (trips as List).map((trip) async {
+          Map<String, dynamic> tripData = {...trip, 'type': 'trip'};
+
+          if (trip['driver_id'] != null) {
+            try {
+              final driverProfile =
+                  await supabase
+                      .from('driver_profiles')
+                      .select()
+                      .eq('id', trip['driver_id'])
+                      .single();
+
+              if (driverProfile != null) {
+                tripData['driver_name'] =
+                    '${driverProfile['first_name']} ${driverProfile['last_name']}';
+                tripData['driver_phone'] = driverProfile['phone_number'];
+                tripData['driver_vehicle'] = driverProfile['vehicle'];
+              }
+            } catch (e) {
+              print('Error obteniendo perfil del conductor: $e');
+            }
+          }
+
+          return Trip.fromJson(tripData);
+        }),
+      );
+
+      // Obtener solicitudes
+      print('Consultando solicitudes...');
       final requests = await supabase
           .from('trip_requests')
-          .select('*')
+          .select()
           .eq('created_by', operatorId)
-          .or('status=broadcasting,status=expired,status=rejected')
+          .or('status.in.(broadcasting,expired,rejected)')
           .gte('created_at', startOfDay)
           .lte('created_at', endOfDay)
           .order('created_at', ascending: false);
 
-      // Convertir solicitudes a formato de Trip
-      final List<Trip> tripRequests =
-          (requests as List).map((req) {
-            // Convertir request a formato de Trip
-            return Trip.fromJson({
-              ...req,
-              'id': req['id'],
-              'origin': req['origin'],
-              'destination': req['destination'],
-              'price': req['price'],
-              'status': req['status'],
-              'created_at': req['created_at'],
-              'created_by': req['created_by'],
-              'type': 'request',
-            });
-          }).toList();
+      print('Solicitudes encontradas: ${requests.length}');
+
+      // Convertir solicitudes
+      final List<Trip> requestList =
+          (requests as List)
+              .map((req) => Trip.fromJson({...req, 'type': 'request'}))
+              .toList();
 
       // Combinar y ordenar
-      final List<Trip> allTrips = [
-        ...tripRequests,
-        ...(trips as List)
-            .map((trip) => Trip.fromJson({...trip, 'type': 'trip'}))
-            .toList(),
-      ];
-
-      // Ordenar por fecha de creación (más reciente primero)
+      final List<Trip> allTrips = [...requestList, ...tripList];
       allTrips.sort(
         (a, b) =>
             DateTime.parse(b.createdAt).compareTo(DateTime.parse(a.createdAt)),
       );
 
+      print('Total de viajes y solicitudes combinados: ${allTrips.length}');
       return allTrips;
-    } catch (error) {
-      developer.log('Error obteniendo viajes del operador: $error');
-      throw Exception('No se pudieron cargar los viajes');
+    } catch (error, stackTrace) {
+      print('Error en getOperatorTrips: $error');
+      print('Stack trace: $stackTrace');
+      throw Exception('No se pudieron cargar los viajes: $error');
     }
   }
 }
@@ -1855,7 +1949,7 @@ class TripRequestService {
               .eq('id', requestId)
               .single();
 
-      if (request['driver_id'] == null) {
+      if (request['attempting_driver_id'] == null) {
         throw Exception('La solicitud no tiene un conductor asignado');
       }
 
@@ -1882,6 +1976,7 @@ class TripRequestService {
     try {
       final channelName =
           'trip_updates_${tripId}_${DateTime.now().millisecondsSinceEpoch}';
+      print('[API DEBUG] Subscribing to Realtime channel: $channelName');
 
       final channel = supabase
           .channel(channelName)
@@ -1895,23 +1990,46 @@ class TripRequestService {
               value: tripId,
             ),
             callback: (payload) {
+              print(
+                '[API DEBUG] Realtime Payload Received: Event=${payload.eventType}, Table=${payload.table}, Schema=${payload.schema}, NewRecord=${payload.newRecord}, OldRecord=${payload.oldRecord}',
+              );
               if (payload.newRecord != null) {
+                print('[API DEBUG] Calling onUpdate with new record.');
                 onUpdate(payload.newRecord);
+              } else {
+                print(
+                  '[API DEBUG] Payload received without newRecord (Event: ${payload.eventType}).',
+                );
               }
             },
           )
           .subscribe((status, [error]) {
+            print(
+              '[API DEBUG] Realtime Subscription Status for $channelName: $status, Error: $error',
+            );
             if (status == RealtimeSubscribeStatus.subscribed) {
+              print('[API DEBUG] Successfully subscribed to $channelName');
             } else if (status == RealtimeSubscribeStatus.closed ||
-                status == RealtimeSubscribeStatus.channelError) {
-              onError(Exception('Error subscribing to trip updates: $status'));
+                status == RealtimeSubscribeStatus.channelError ||
+                status == RealtimeSubscribeStatus.timedOut ||
+                error != null) {
+              print('[API DEBUG] Subscription error/closed for $channelName.');
+              onError(
+                error ??
+                    Exception(
+                      'Subscription failed/closed with status: $status',
+                    ),
+              );
             }
           });
 
       return channel;
     } catch (e) {
+      print(
+        '[API DEBUG] Error setting up Realtime subscription for trip $tripId: $e',
+      );
       onError(e);
-      return supabase.channel('error_channel');
+      return supabase.channel('error_channel_$tripId');
     }
   }
 
@@ -1921,7 +2039,7 @@ class TripRequestService {
     } catch (e) {
       try {
         channel.unsubscribe();
-      } catch (innerError) {}
+      } catch (e) {}
     }
   }
 
@@ -2234,7 +2352,7 @@ class AnalyticsService {
       final data = jsonDecode(response.body);
       return data['display_name'] ?? '$latitude, $longitude';
     } catch (e) {
-      developer.log('Error getting address: $e');
+      print('Error getting address: $e');
       return '$latitude, $longitude';
     }
   }
@@ -2253,7 +2371,7 @@ class AnalyticsService {
       final data = jsonDecode(response.body);
       return List<Map<String, dynamic>>.from(data);
     } catch (e) {
-      developer.log('Error searching locations: $e');
+      print('Error searching locations: $e');
       return [];
     }
   }
@@ -2322,7 +2440,7 @@ Future<Map<String, dynamic>> loginUser(String phoneNumber, String pin) async {
 
     return userData;
   } catch (e) {
-    developer.log('Error en loginUser: $e');
+    print('Error en loginUser: $e');
     throw Exception('Credenciales inválidas');
   }
 }

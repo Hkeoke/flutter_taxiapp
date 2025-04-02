@@ -303,9 +303,17 @@ EXECUTE FUNCTION set_request_expiration();
 
 -- Habilitar replicación para la tabla de viajes
 ALTER TABLE trips REPLICA IDENTITY FULL;
+-- Habilitar replicación para la tabla de perfiles de conductor (¡NUEVO!)
+ALTER TABLE driver_profiles REPLICA IDENTITY FULL;
+-- Habilitar replicación para la tabla de solicitudes (si es necesario para otras suscripciones)
+ALTER TABLE trip_requests REPLICA IDENTITY FULL;
 
 -- Habilitar la publicación para la tabla de viajes
 CREATE PUBLICATION trip_changes FOR TABLE trips;
+-- Habilitar la publicación para perfiles de conductor (¡NUEVO!)
+CREATE PUBLICATION profile_changes FOR TABLE driver_profiles;
+-- Habilitar la publicación para solicitudes (si es necesario para otras suscripciones)
+-- CREATE PUBLICATION request_changes FOR TABLE trip_requests; -- Descomentar si se necesita una publicación separada
 
 -- ==========================================
 -- FUNCIONES PARA MANEJO DE RADIO DINÁMICO
@@ -575,7 +583,7 @@ BEGIN
     passenger_phone
   )
   VALUES (
-    request_data.driver_id,
+    request_data.attempting_driver_id,
     request_data.created_by,
     request_data.origin,
     request_data.destination,
