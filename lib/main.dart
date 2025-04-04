@@ -27,6 +27,7 @@ import 'screens/operators_list_screen.dart';
 import 'providers/trip_provider.dart';
 import 'screens/operator_reports_screen.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -38,11 +39,8 @@ void main() async {
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd1bmV2d2xxbXdod3N5a3B2ZnFpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzkyOTAwMTksImV4cCI6MjA1NDg2NjAxOX0.FR-CGD6ZUPSh5_0MKUYiUgYuKcyi96ACjwrmYFVJqoE',
   );
 
-  // Inicializar datos de formato para español (o el locale principal que uses)
-  // El primer argumento puede ser null para usar el locale por defecto del sistema,
-  // o especifica uno como 'es_MX' o 'es'.
-  await initializeDateFormatting(null, 'es_MX');
-  // O si solo necesitas español general: await initializeDateFormatting('es', null);
+  // Inicializar datos de formato para español
+  await initializeDateFormatting('es_MX', null);
 
   runApp(
     MultiProvider(
@@ -66,6 +64,17 @@ class MyApp extends StatelessWidget {
         primarySwatch: Colors.red,
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
       ),
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('es', 'MX'),
+        Locale('es', 'ES'),
+        Locale('en', 'US'),
+      ],
+      locale: const Locale('es', 'MX'),
       home: AuthWrapper(),
       routes: {
         // Rutas comunes para todas las pantallas

@@ -28,6 +28,6 @@ const String PREFS_REJECTED_REQUESTS = 'rejectedRequests';
 const String PREFS_HAS_ACTIVE_TRIP = 'has_active_trip'; // Para el servicio BG
 
 // Otros
-const double MAX_ROUTE_DEVIATION = 50.0; // Metros
+const double MAX_ROUTE_DEVIATION = 5.0; // Metros
 const int LOCATION_UPDATE_INTERVAL = 10000; // Milisegundos
-const double LOCATION_UPDATE_DISTANCE_FILTER = 10.0; // Metros
+const double LOCATION_UPDATE_DISTANCE_FILTER = 5.0; // Metros

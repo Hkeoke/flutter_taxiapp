@@ -115,14 +115,14 @@ class _GeneralReportsScreenState extends State<GeneralReportsScreen> {
     }
 
     try {
-      final tripService = TripRequestService();
-      final response = await true; /*tripService.(
+      final tripService = TripService();
+      final response = await tripService.getTrips(
         startDate: _apiDateFormat.format(startDate),
         endDate: _apiDateFormat.format(endDate),
         driverId: selectedDriver?.id,
         operatorId: selectedOperator?.id,
         year: selectedYear,
-      );*/
+      );
 
       if (mounted) {
         setState(() {
@@ -499,7 +499,7 @@ class _GeneralReportsScreenState extends State<GeneralReportsScreen> {
         elevation: 1.0,
         leading: IconButton(
           icon: Icon(LucideIcons.menu, color: iconColor),
-          onPressed: () => setState(() => isSidebarVisible = !isSidebarVisible),
+          onPressed: () => setState(() => isSidebarVisible = true),
         ),
         actions: [
           IconButton(
@@ -591,14 +591,11 @@ class _GeneralReportsScreenState extends State<GeneralReportsScreen> {
             ),
 
           if (isSidebarVisible)
-            Positioned(
-              left: 0,
-              top: 0,
-              bottom: 0,
+            Positioned.fill(
               child: Sidebar(
                 isVisible: isSidebarVisible,
-                role: 'admin',
                 onClose: () => setState(() => isSidebarVisible = false),
+                role: 'admin',
               ),
             ),
         ],
@@ -1154,43 +1151,47 @@ class _GeneralReportsScreenState extends State<GeneralReportsScreen> {
   }
 
   Future<void> _selectDate(BuildContext context, bool isStartDate) async {
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: isStartDate ? startDate : endDate,
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now().add(Duration(days: 365)),
-      locale: const Locale('es', 'ES'),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: ColorScheme.light(
-              primary: primaryColor,
-              onPrimary: Colors.white,
-              onSurface: textColorPrimary,
+    final DateTime? picked = await Navigator.of(context).push(
+      MaterialPageRoute<DateTime>(
+        builder: (BuildContext context) {
+          return Theme(
+            data: ThemeData.light().copyWith(
+              colorScheme: ColorScheme.light(
+                primary: primaryColor,
+                onPrimary: Colors.white,
+                onSurface: textColorPrimary,
+              ),
             ),
-            textButtonTheme: TextButtonThemeData(
-              style: TextButton.styleFrom(foregroundColor: primaryColor),
+            child: Builder(
+              builder: (BuildContext context) {
+                return Scaffold(
+                  body: Center(
+                    child: DatePickerDialog(
+                      initialDate: isStartDate ? startDate : endDate,
+                      firstDate: DateTime(2020),
+                      lastDate: DateTime.now().add(Duration(days: 365)),
+                      initialEntryMode: DatePickerEntryMode.calendar,
+                    ),
+                  ),
+                );
+              },
             ),
-          ),
-          child: child!,
-        );
-      },
+          );
+        },
+      ),
     );
+
     if (picked != null) {
       setState(() {
         if (isStartDate) {
-          if (picked.isAfter(endDate)) {
-            startDate = picked;
-            endDate = picked;
-          } else {
-            startDate = picked;
+          startDate = picked;
+          if (endDate.isBefore(startDate)) {
+            endDate = startDate;
           }
         } else {
-          if (picked.isBefore(startDate)) {
-            endDate = picked;
-            startDate = picked;
-          } else {
-            endDate = picked;
+          endDate = picked;
+          if (startDate.isAfter(endDate)) {
+            startDate = endDate;
           }
         }
       });

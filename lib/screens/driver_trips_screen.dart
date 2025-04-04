@@ -64,7 +64,9 @@ class _DriverTripsScreenState extends State<DriverTripsScreen>
       }
 
       final tripService = TripService();
+      print('buscar los viajes');
       final driverTrips = await tripService.getDriverTrips(user.id);
+      print(driverTrips);
 
       if (mounted) {
         setState(() {
@@ -78,7 +80,7 @@ class _DriverTripsScreenState extends State<DriverTripsScreen>
         });
       }
     } catch (e) {
-      developer.log('Error cargando viajes: $e');
+      print('Error cargando viajes: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -209,8 +211,9 @@ class _DriverTripsScreenState extends State<DriverTripsScreen>
     final statusIconData = _getStatusIconData(trip.status);
     final statusText = _getStatusText(trip.status);
     final displayDate = _formatDisplayDate(trip.createdAt);
-    final commission = trip.price * 0.1;
-    final netEarning = trip.price - commission;
+    final price = trip.price ?? 0.0;
+    final commission = price * 0.1;
+    final netEarning = price - commission;
 
     return Card(
       elevation: 1.5,
@@ -267,7 +270,7 @@ class _DriverTripsScreenState extends State<DriverTripsScreen>
               const SizedBox(height: 12),
               _buildPriceDetailRow(
                 label: 'Precio Viaje:',
-                value: trip.price,
+                value: price,
                 valueColor: textColorPrimary,
               ),
               const SizedBox(height: 4),

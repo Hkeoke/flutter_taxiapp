@@ -717,6 +717,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
   void _onLocationChanged(location_pkg.LocationData locationData) {
     if (!mounted) return;
+
+    // Guardar la ubicación anterior para calcular la dirección
+    final LatLng? previousLocation =
+        _userLocation != null
+            ? LatLng(_userLocation!.latitude!, _userLocation!.longitude!)
+            : null;
+
     setState(() {
       _userLocation = locationData;
     });
@@ -734,7 +741,117 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         locationData.longitude!,
       );
       _updateVisibleRoute(currentLocation);
+
+      // Actualizar la orientación del mapa si estamos en un viaje activo
+      _updateMapOrientation(
+        currentLocation,
+        previousLocation,
+        locationData.heading,
+      );
     }
+  }
+
+  // Nuevo método para actualizar la orientación del mapa
+  Future<void> _updateMapOrientation(
+    LatLng currentLocation,
+    LatLng? previousLocation,
+    double? heading,
+  ) async {
+    if (!_mapController.isCompleted) return;
+
+    final controller = await _mapController.future;
+    double bearing = 0.0;
+
+    // Prioridad 1: Usar el heading del sensor si está disponible y es confiable
+    if (heading != null && heading > 0) {
+      bearing = heading;
+    }
+    // Prioridad 2: Calcular bearing basado en el movimiento entre puntos
+    else if (previousLocation != null) {
+      bearing = _calculateBearing(
+        previousLocation.latitude,
+        previousLocation.longitude,
+        currentLocation.latitude,
+        currentLocation.longitude,
+      );
+    }
+    // Prioridad 3: Calcular bearing basado en la ruta si hay puntos suficientes
+    else if (_tripProvider.visibleRoute.length > 1) {
+      // Encontrar el punto más cercano en la ruta y el siguiente
+      int closestPointIndex = _findClosestPointIndex(
+        currentLocation,
+        _tripProvider.visibleRoute,
+      );
+      if (closestPointIndex < _tripProvider.visibleRoute.length - 1) {
+        final nextPoint = _tripProvider.visibleRoute[closestPointIndex + 1];
+        bearing = _calculateBearing(
+          currentLocation.latitude,
+          currentLocation.longitude,
+          nextPoint.latitude,
+          nextPoint.longitude,
+        );
+      }
+    }
+
+    // Aplicar la rotación al mapa
+    controller.animateCamera(
+      CameraUpdate.newCameraPosition(
+        CameraPosition(
+          target: currentLocation,
+          zoom: 15.0, // Mantener el zoom actual o ajustar según necesidad
+          bearing: bearing,
+          tilt: 30.0, // Añadir inclinación para mejor efecto 3D como en Uber
+        ),
+      ),
+    );
+  }
+
+  // Método para calcular el bearing (dirección) entre dos puntos
+  double _calculateBearing(
+    double startLat,
+    double startLng,
+    double endLat,
+    double endLng,
+  ) {
+    startLat = startLat * pi / 180;
+    startLng = startLng * pi / 180;
+    endLat = endLat * pi / 180;
+    endLng = endLng * pi / 180;
+
+    double y = sin(endLng - startLng) * cos(endLat);
+    double x =
+        cos(startLat) * sin(endLat) -
+        sin(startLat) * cos(endLat) * cos(endLng - startLng);
+    double bearing = atan2(y, x);
+
+    bearing = bearing * 180 / pi;
+    bearing = (bearing + 360) % 360;
+
+    return bearing;
+  }
+
+  // Método para encontrar el índice del punto más cercano en la ruta
+  int _findClosestPointIndex(LatLng currentLocation, List<LatLng> route) {
+    if (route.isEmpty) return 0;
+
+    int closestPointIndex = 0;
+    double minDistance = double.infinity;
+
+    for (int i = 0; i < route.length; i++) {
+      final distance = _calculateDistance(
+        currentLocation.latitude,
+        currentLocation.longitude,
+        route[i].latitude,
+        route[i].longitude,
+      );
+
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestPointIndex = i;
+      }
+    }
+
+    return closestPointIndex;
   }
 
   // Añadir este nuevo método para actualizar la ruta visible
@@ -1437,7 +1554,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
       // 3. Calcular y aplicar comisión (si aplica)
       // Esta lógica podría estar mejor en el backend al recibir 'completed'
-      final commission = activeTrip.price * 0.2; // Ejemplo de comisión
+      final commission = activeTrip.price * 0.1; // Ejemplo de comisión
       final userId = _authProvider.user!.id;
       // await driverService.applyCommission(userId, activeTrip.id, commission); // Llamada a API hipotética
 
@@ -1729,8 +1846,23 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         _userLocation!.latitude!,
         _userLocation!.longitude!,
       );
-      controller.animateCamera(CameraUpdate.newLatLngZoom(position, 15.0));
-      print('Mapa centrado en: ${position.latitude}, ${position.longitude}');
+
+      // Obtener el bearing (dirección) si está disponible
+      double bearing = _userLocation!.heading ?? 0.0;
+
+      controller.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(
+            target: position,
+            zoom: 15.0,
+            bearing: bearing, // Usar el bearing para orientar el mapa
+          ),
+        ),
+      );
+
+      print(
+        'Mapa centrado en: ${position.latitude}, ${position.longitude} con orientación: $bearing',
+      );
     } catch (e) {
       print('Error centrando el mapa: $e');
     }
@@ -1768,12 +1900,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     ); // LOG AÑADIDO
 
     if (visibleRoute.isNotEmpty) {
-      _fitMapToRoute(controller, visibleRoute);
+      // Si estamos en un viaje activo, ajustar la vista a la ruta pero mantener la orientación
+      _fitMapToRouteWithOrientation(controller, visibleRoute);
     } else if (_userLocation != null) {
+      // Si solo tenemos la ubicación del usuario, centrar y orientar según su dirección
+      double bearing = _userLocation!.heading ?? 0.0;
       controller.animateCamera(
-        CameraUpdate.newLatLngZoom(
-          LatLng(_userLocation!.latitude!, _userLocation!.longitude!),
-          15.0, // Zoom deseado
+        CameraUpdate.newCameraPosition(
+          CameraPosition(
+            target: LatLng(_userLocation!.latitude!, _userLocation!.longitude!),
+            zoom: 15.0,
+            bearing: bearing,
+            tilt: 0.0, // Sin inclinación cuando no hay ruta activa
+          ),
         ),
       );
     } else {
@@ -1784,7 +1923,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     }
   }
 
-  void _fitMapToRoute(
+  // Nuevo método para ajustar el mapa a la ruta manteniendo la orientación
+  void _fitMapToRouteWithOrientation(
     GoogleMapController controller,
     List<LatLng> routePoints,
   ) {
@@ -1792,13 +1932,27 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       // Si hay solo un punto (o ninguno), centrar en ese punto o en la ubicación del usuario
       if (routePoints.isNotEmpty) {
         controller.animateCamera(
-          CameraUpdate.newLatLngZoom(routePoints.first, 15.0),
+          CameraUpdate.newCameraPosition(
+            CameraPosition(
+              target: routePoints.first,
+              zoom: 15.0,
+              bearing: _userLocation?.heading ?? 0.0,
+              tilt: 30.0,
+            ),
+          ),
         );
       } else if (_userLocation != null) {
         controller.animateCamera(
-          CameraUpdate.newLatLngZoom(
-            LatLng(_userLocation!.latitude!, _userLocation!.longitude!),
-            15.0,
+          CameraUpdate.newCameraPosition(
+            CameraPosition(
+              target: LatLng(
+                _userLocation!.latitude!,
+                _userLocation!.longitude!,
+              ),
+              zoom: 15.0,
+              bearing: _userLocation?.heading ?? 0.0,
+              tilt: 30.0,
+            ),
           ),
         );
       }
@@ -1824,16 +1978,74 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
         northeast: LatLng(maxLat, maxLng),
       );
 
-      controller.animateCamera(
-        CameraUpdate.newLatLngBounds(bounds, 60.0),
-      ); // Padding
-      print('Mapa ajustado a la ruta.');
+      // Primero ajustar a los límites
+      controller.animateCamera(CameraUpdate.newLatLngBounds(bounds, 60.0));
+
+      // Luego, si tenemos ubicación actual, calcular la orientación basada en la ruta
+      if (_userLocation != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final currentLocation = LatLng(
+            _userLocation!.latitude!,
+            _userLocation!.longitude!,
+          );
+          int closestPointIndex = _findClosestPointIndex(
+            currentLocation,
+            routePoints,
+          );
+
+          // Calcular bearing hacia el siguiente punto de la ruta
+          double bearing = 0.0;
+          if (closestPointIndex < routePoints.length - 1) {
+            final nextPoint = routePoints[closestPointIndex + 1];
+            bearing = _calculateBearing(
+              currentLocation.latitude,
+              currentLocation.longitude,
+              nextPoint.latitude,
+              nextPoint.longitude,
+            );
+          } else if (_userLocation!.heading != null) {
+            bearing = _userLocation!.heading!;
+          }
+
+          // Aplicar la orientación manteniendo el zoom ajustado
+          controller.animateCamera(
+            CameraUpdate.newCameraPosition(
+              CameraPosition(
+                target: currentLocation,
+                zoom:
+                    22.0, // Usar un valor fijo en lugar de controller.cameraPosition?.zoom
+                bearing: bearing,
+                tilt: 30.0,
+              ),
+            ),
+          );
+        });
+      }
+
+      print('Mapa ajustado a la ruta con orientación.');
     } catch (e) {
       print('Error ajustando el mapa a la ruta: $e');
       // Fallback: centrar en el primer punto
-      controller.animateCamera(
-        CameraUpdate.newLatLngZoom(routePoints.first, 15.0),
-      );
+      if (_userLocation != null) {
+        controller.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(
+              target: LatLng(
+                _userLocation!.latitude!,
+                _userLocation!.longitude!,
+              ),
+              zoom: 15.0,
+              bearing: _userLocation?.heading ?? 0.0,
+            ),
+          ),
+        );
+      } else {
+        controller.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(target: routePoints.first, zoom: 15.0),
+          ),
+        );
+      }
     }
   }
 

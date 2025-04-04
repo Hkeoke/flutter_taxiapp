@@ -683,28 +683,36 @@ class _OperatorReportsScreenState extends State<OperatorReportsScreen> {
   }
 
   Future<void> _selectDate(BuildContext context, bool isStartDate) async {
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: isStartDate ? startDate : endDate,
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now().add(Duration(days: 365)),
-      locale: const Locale('es', 'ES'),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: ColorScheme.light(
-              primary: primaryColor,
-              onPrimary: Colors.white,
-              onSurface: textColorPrimary,
+    final DateTime? picked = await Navigator.of(context).push(
+      MaterialPageRoute<DateTime>(
+        builder: (BuildContext context) {
+          return Theme(
+            data: ThemeData.light().copyWith(
+              colorScheme: ColorScheme.light(
+                primary: primaryColor,
+                onPrimary: Colors.white,
+                onSurface: textColorPrimary,
+              ),
             ),
-            textButtonTheme: TextButtonThemeData(
-              style: TextButton.styleFrom(foregroundColor: primaryColor),
+            child: Builder(
+              builder: (BuildContext context) {
+                return Scaffold(
+                  body: Center(
+                    child: DatePickerDialog(
+                      initialDate: isStartDate ? startDate : endDate,
+                      firstDate: DateTime(2020),
+                      lastDate: DateTime.now().add(Duration(days: 365)),
+                      initialEntryMode: DatePickerEntryMode.calendar,
+                    ),
+                  ),
+                );
+              },
             ),
-          ),
-          child: child!,
-        );
-      },
+          );
+        },
+      ),
     );
+
     if (picked != null) {
       setState(() {
         if (isStartDate) {

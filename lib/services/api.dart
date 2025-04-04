@@ -298,20 +298,20 @@ class Trip {
     }
 
     return Trip(
-      id: json['id'],
-      origin: json['origin'],
-      destination: json['destination'],
-      originLat: json['origin_lat'].toDouble(),
-      originLng: json['origin_lng'].toDouble(),
-      destinationLat: json['destination_lat'].toDouble(),
-      destinationLng: json['destination_lng'].toDouble(),
-      price: double.parse(json['price'].toString()),
-      status: json['status'],
-      createdBy: json['created_by'],
+      id: json['id'] ?? '',
+      origin: json['origin'] ?? '',
+      destination: json['destination'] ?? '',
+      originLat: json['origin_lat']?.toDouble() ?? 0.0,
+      originLng: json['origin_lng']?.toDouble() ?? 0.0,
+      destinationLat: json['destination_lat']?.toDouble() ?? 0.0,
+      destinationLng: json['destination_lng']?.toDouble() ?? 0.0,
+      price: json['price'] != null ? (json['price'] as num).toDouble() : 0.0,
+      status: json['status'] ?? '',
+      createdBy: json['created_by'] ?? '',
       driverId: json['driver_id'],
       passengerPhone: json['passenger_phone'],
       observations: json['observations'],
-      createdAt: json['created_at'],
+      createdAt: json['created_at'] ?? '',
       completedAt: json['completed_at'],
       cancelledAt: json['cancelled_at'],
       cancelledBy: json['cancelled_by'],
@@ -1239,6 +1239,7 @@ class TripService {
         .eq('driver_id', driverId)
         .filter('status', 'in', ['completed', 'cancelled'])
         .order('created_at', ascending: false);
+    print(response);
 
     return response.map((data) => Trip.fromJson(data)).toList();
   }
@@ -1335,6 +1336,59 @@ class TripService {
       print('Error en getOperatorTrips: $error');
       print('Stack trace: $stackTrace');
       throw Exception('No se pudieron cargar los viajes: $error');
+    }
+  }
+
+  Future<List<Trip>> getTrips({
+    String? startDate,
+    String? endDate,
+    String? driverId,
+    String? operatorId,
+    int? year,
+  }) async {
+    try {
+      var query = supabase
+          .from('trips')
+          .select('''
+            *,
+            driver_profiles (
+              id,
+              first_name,
+              last_name
+            ),
+            users!created_by (
+              id,
+              role,
+              operator_profiles (
+                first_name,
+                last_name
+              )
+            )
+          ''')
+          .eq('status', 'completed');
+
+      if (startDate != null) {
+        query = query.gte('created_at', startDate);
+      }
+      if (endDate != null) {
+        query = query.lte('created_at', endDate);
+      }
+      if (driverId != null) {
+        query = query.eq('driver_id', driverId);
+      }
+      if (operatorId != null) {
+        query = query.eq('created_by', operatorId);
+      }
+      if (year != null) {
+        query = query.ilike('created_at', '$year%');
+      }
+
+      final response = await query.order('created_at', ascending: false);
+
+      return response.map((data) => Trip.fromJson(data)).toList();
+    } catch (e) {
+      print('Error obteniendo viajes: $e');
+      return [];
     }
   }
 }

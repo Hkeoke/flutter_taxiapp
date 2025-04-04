@@ -22,6 +22,7 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
   List<Trip> trips = [];
   String activeTab = 'active';
   Timer? _refreshTimer;
+  final TextEditingController _reasonController = TextEditingController();
 
   final Color primaryColor = Colors.red;
   final Color scaffoldBackgroundColor = Colors.grey.shade100;
@@ -58,6 +59,7 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _reasonController.dispose();
     super.dispose();
   }
 
@@ -115,81 +117,94 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
     }
   }
 
-  Future<void> handleCancelTrip(Trip trip) async {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          title: const Text('Confirmar Cancelación'),
-          content: const Text(
-            '¿Estás seguro de que deseas cancelar este viaje?',
-            style: TextStyle(fontSize: 15),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text('No', style: TextStyle(color: textColorSecondary)),
-            ),
-            TextButton(
-              onPressed: () async {
-                Navigator.of(context).pop();
-                try {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Row(
-                        children: [
-                          CircularProgressIndicator(
-                            strokeWidth: 3,
-                            color: Colors.white,
-                          ),
-                          SizedBox(width: 15),
-                          Text('Cancelando...'),
-                        ],
-                      ),
-                      backgroundColor: infoColor.withOpacity(0.8),
-                    ),
-                  );
-
-                  final tripRequestService = TripRequestService();
-                  final tripService = TripService();
-
-                  if (trip.status == 'broadcasting') {
-                    await tripRequestService.cancelBroadcastingRequest(trip.id);
-                  } else {
-                    await tripService.updateTripStatus(
-                      trip.id,
-                      TripStatus.cancelled,
-                    );
-                  }
-
-                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Viaje cancelado correctamente'),
-                      backgroundColor: successColor,
-                    ),
-                  );
-                  loadTrips();
-                } catch (error) {
-                  print('Error cancelando viaje: $error');
-                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('No se pudo cancelar el viaje'),
-                      backgroundColor: errorColor,
-                    ),
-                  );
-                }
-              },
-              child: Text('Sí, Cancelar', style: TextStyle(color: errorColor)),
-            ),
-          ],
+  Future<void> handleCancelTrip(String tripId, bool isBroadcasting) async {
+    try {
+      if (isBroadcasting) {
+        // Para solicitudes en broadcasting
+        final result = await TripRequestService().cancelBroadcastingRequest(
+          tripId,
         );
-      },
-    );
+
+        // En lugar de usar ScaffoldMessenger directamente:
+        if (mounted && context.mounted) {
+          // Verificar si el contexto sigue siendo válido
+          ScaffoldMessenger.of(context).clearSnackBars();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Solicitud cancelada correctamente')),
+          );
+        }
+
+        // Recargar viajes después de cancelar
+        loadTrips();
+      } else {
+        // Para viajes en progreso
+        showDialog(
+          context: context,
+          builder:
+              (context) => AlertDialog(
+                title: Text('Cancelar viaje'),
+                content: TextField(
+                  controller: _reasonController,
+                  decoration: InputDecoration(
+                    hintText: 'Motivo de cancelación',
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: Text('Cancelar'),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      Navigator.pop(context);
+                      try {
+                        final operatorId = widget.operatorId;
+                        if (operatorId != null) {
+                          await TripRequestService().cancelTrip(
+                            tripId,
+                            'Cancelado por operador',
+                            operatorId,
+                          );
+                        } else {
+                          throw Exception('ID de operador no disponible');
+                        }
+
+                        if (mounted && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Viaje cancelado correctamente'),
+                            ),
+                          );
+                        }
+
+                        loadTrips();
+                      } catch (e) {
+                        print('Error cancelando viaje: $e');
+
+                        if (mounted && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Error al cancelar el viaje: $e'),
+                            ),
+                          );
+                        }
+                      }
+                    },
+                    child: Text('Confirmar'),
+                  ),
+                ],
+              ),
+        );
+      }
+    } catch (e) {
+      print('Error cancelando viaje: $e');
+
+      if (mounted && context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error al cancelar: $e')));
+      }
+    }
   }
 
   Future<void> handleResendTrip(String tripId) async {
@@ -323,24 +338,39 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
 
   List<Trip> getFilteredTrips() {
     print('Filtrando viajes. Total antes de filtrar: ${trips.length}');
-    final filtered =
-        trips.where((trip) {
-          if (activeTab == 'active') {
-            return [
-              'broadcasting',
-              'pending',
-              'in_progress',
-            ].contains(trip.status.toLowerCase());
-          }
-          if (activeTab == 'cancelled') {
-            return [
-              'cancelled',
-              'expired',
-              'rejected',
-            ].contains(trip.status.toLowerCase());
-          }
-          return trip.status.toLowerCase() == activeTab;
-        }).toList();
+
+    // Crear un Set para rastrear IDs ya incluidos
+    final Set<String> includedIds = {};
+    final List<Trip> filtered = [];
+
+    for (final trip in trips) {
+      // Si ya incluimos este ID, omitirlo
+      if (includedIds.contains(trip.id)) continue;
+
+      bool shouldInclude = false;
+
+      if (activeTab == 'active') {
+        shouldInclude = [
+          'broadcasting',
+          'pending',
+          'in_progress',
+        ].contains(trip.status.toLowerCase());
+      } else if (activeTab == 'cancelled') {
+        shouldInclude = [
+          'cancelled',
+          'expired',
+          'rejected',
+        ].contains(trip.status.toLowerCase());
+      } else {
+        shouldInclude = trip.status.toLowerCase() == activeTab;
+      }
+
+      if (shouldInclude) {
+        filtered.add(trip);
+        includedIds.add(trip.id);
+      }
+    }
+
     print('Viajes filtrados para tab $activeTab: ${filtered.length}');
     return filtered;
   }
@@ -604,7 +634,7 @@ class _OperatorTripsScreenState extends State<OperatorTripsScreen> {
                         child: ElevatedButton.icon(
                           icon: Icon(LucideIcons.x, size: 16),
                           label: const Text('Cancelar Viaje'),
-                          onPressed: () => handleCancelTrip(trip),
+                          onPressed: () => handleCancelTrip(trip.id, canCancel),
                           style: ElevatedButton.styleFrom(
                             foregroundColor: Colors.white,
                             backgroundColor: errorColor,

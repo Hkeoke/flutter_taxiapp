@@ -155,7 +155,6 @@ class _DriverReportsScreenState extends State<DriverReportsScreen> {
               : (initial.isAfter(last) ? last : initial),
       firstDate: first,
       lastDate: last,
-      locale: const Locale('es', 'ES'),
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(

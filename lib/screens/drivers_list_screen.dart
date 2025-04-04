@@ -238,8 +238,6 @@ class _DriversListScreenState extends State<DriversListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final displayedDrivers = filteredDrivers;
-
     return Scaffold(
       backgroundColor: scaffoldBackgroundColor,
       appBar: AppBar(
@@ -251,18 +249,26 @@ class _DriversListScreenState extends State<DriversListScreen> {
         foregroundColor: textColorPrimary,
         elevation: 1.0,
         leading: IconButton(
-          icon: Icon(Icons.menu, color: iconColor),
+          icon: Icon(LucideIcons.menu, color: iconColor),
           onPressed: () => setState(() => isSidebarVisible = true),
         ),
         actions: [
           IconButton(
             icon: Icon(LucideIcons.userPlus, color: primaryColor),
-            tooltip: 'Crear Nuevo Chofer',
+            tooltip: 'Crear Chofer',
             onPressed:
                 () => Navigator.pushNamed(
                   context,
                   '/createDriverScreen',
                 ).then((_) => _fetchDrivers()),
+          ),
+          IconButton(
+            icon: Icon(LucideIcons.refreshCw, color: primaryColor, size: 20),
+            tooltip: 'Refrescar',
+            onPressed:
+                loading || refreshing
+                    ? null
+                    : () => _fetchDrivers(isRefresh: true),
           ),
         ],
       ),
@@ -281,14 +287,14 @@ class _DriversListScreenState extends State<DriversListScreen> {
                           color: primaryColor,
                           onRefresh: () => _fetchDrivers(isRefresh: true),
                           child:
-                              displayedDrivers.isEmpty
+                              filteredDrivers.isEmpty
                                   ? _buildEmptyState(searchQuery.isNotEmpty)
                                   : ListView.builder(
                                     padding: const EdgeInsets.all(12.0),
-                                    itemCount: displayedDrivers.length,
+                                    itemCount: filteredDrivers.length,
                                     itemBuilder: (context, index) {
                                       return _buildDriverCard(
-                                        displayedDrivers[index],
+                                        filteredDrivers[index],
                                       );
                                     },
                                   ),
@@ -297,19 +303,13 @@ class _DriversListScreenState extends State<DriversListScreen> {
             ],
           ),
           if (isSidebarVisible)
-            GestureDetector(
-              onTap: () => setState(() => isSidebarVisible = false),
-              child: Container(color: Colors.black54),
-            ),
-          if (isSidebarVisible)
-            Positioned(
-              left: 0,
-              top: 0,
-              bottom: 0,
+            Container(
+              width: MediaQuery.of(context).size.width,
+              height: MediaQuery.of(context).size.height,
               child: Sidebar(
                 isVisible: isSidebarVisible,
-                role: 'admin',
                 onClose: () => setState(() => isSidebarVisible = false),
+                role: 'admin',
               ),
             ),
         ],
