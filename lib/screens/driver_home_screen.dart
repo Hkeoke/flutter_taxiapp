@@ -1120,10 +1120,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     print(
       '[UI DEBUG] Attempting to subscribe to trip updates for ID: $tripId',
     ); // LOG
+    print("sucrito a actualizaciones de viaje");
     try {
       _tripSubscription = tripRequestService.subscribeToTripUpdates(
         tripId,
         (payload) {
+          _handleTripUpdate(payload);
           print(
             '[UI DEBUG] Trip Update Payload Received (UI Layer) for $tripId: $payload',
           ); // LOG
@@ -1696,6 +1698,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
 
     if (status == TRIP_STATUS_CANCELLED) {
       // Asegúrate que TRIP_STATUS_CANCELLED sea 'cancelled'
+      _tripProvider.clearTrip();
       print('[UI DEBUG] Cancellation detected for trip $tripId.'); // LOG
       _unsubscribeFromTripUpdates();
       print('[UI DEBUG] Calling _tripProvider.clearTrip()'); // LOG
