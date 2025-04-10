@@ -382,12 +382,29 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _unsubscribeFromRequests(); // Asegurar limpieza
-    _unsubscribeFromTripUpdates(); // Asegurar limpieza
-    _unsubscribeFromBalanceUpdates(); // <- NUEVO: Limpiar suscripción de balance
+
+    // Primero, detener el seguimiento de ubicación
+    if (_locationSubscription != null) {
+      _locationSubscription?.cancel();
+      _locationSubscription = null;
+    }
+
+    // Intentar desactivar el modo de fondo antes de destruir
+    try {
+      _location.enableBackgroundMode(enable: false);
+    } catch (e) {
+      print('Error al desactivar modo background: $e');
+    }
+
+    // Luego limpiar las suscripciones
+    _unsubscribeFromRequests();
+    _unsubscribeFromTripUpdates();
+    _unsubscribeFromBalanceUpdates();
+
+    // Liberar recursos
     _audioPlayer.dispose();
-    _locationSubscription?.cancel(); // Cancelar suscripción de ubicación
-    // No detener el servicio en segundo plano aquí, se maneja en didChangeAppLifecycleState
+
+    // Llamar a dispose del padre al final
     super.dispose();
   }
 

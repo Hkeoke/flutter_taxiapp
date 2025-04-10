@@ -60,6 +60,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Mi Aplicación',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.red,
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
@@ -121,6 +122,7 @@ class AdminTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      debugShowCheckedModeBanner: false,
       home: DefaultTabController(
         length: 2,
         child: Scaffold(
@@ -189,6 +191,7 @@ class DriverTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      debugShowCheckedModeBanner: false,
       home: DefaultTabController(
         length: 2,
         child: Scaffold(
@@ -229,6 +232,7 @@ class OperatorTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      debugShowCheckedModeBanner: false,
       home: DefaultTabController(
         length: 2,
         child: Scaffold(

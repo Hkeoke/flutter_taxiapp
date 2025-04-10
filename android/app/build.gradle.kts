@@ -36,12 +36,23 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            
+            // Cambiar configuraciones para release
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro")
+            
+            // Quitar la configuración de debugSymbolLevel en release
+            // ndk {
+            //    debugSymbolLevel = "FULL"
+            // }
         }
     }
 
     packagingOptions {
         jniLibs {
-            excludes.add("**/libapp.so")
+            // Quitar la exclusión de libapp.so
+            // excludes.add("**/libapp.so")
         }
     }
 }
